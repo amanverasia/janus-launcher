@@ -67,6 +67,7 @@ codex_validate_config_overrides() {
         ((i += 1))
         value="${arguments[i]}"
         ;;
+      -c=*) value="${argument#-c=}" ;;
       --config=*) value="${argument#--config=}" ;;
       *) continue ;;
     esac
@@ -98,7 +99,7 @@ codex_parse_arguments() {
         ((i += 1))
         continue
         ;;
-      --config=*) continue ;;
+      -c=*|--config=*) continue ;;
       --model|-m)
         if ((i + 1 >= ${#arguments[@]})) || [[ -z "${arguments[i + 1]}" ]]; then
           printf 'codex-janus: %s requires a value\n' "$argument" >&2

@@ -94,6 +94,8 @@ pass 'exact model forms and provider contract'
 
 for item in \
   '-c|model_provider="other"' \
+  '-c=model_provider="other"|' \
+  '-c=model_providers.janus.base_url="other"|' \
   '--config|model_providers.janus="other"' \
   '--config=model_providers.janus.base_url="other"|'
 do
@@ -113,7 +115,8 @@ pass 'owned-key rejection and missing values'
 
 # Owned-looking text outside config option values is ordinary caller input.
 args=(exec 'model_provider="prompt"' 'model_providers.janus.base_url="prompt"'
-  --config 'features.example=true' --config=history.persistence=save-all)
+  --config 'features.example=true' --config=history.persistence=save-all
+  '-c=features.attached="kept byte-for-byte"')
 out="$(run_with_url 'https://janus.test/v1/' --model model-a "${args[@]}")"
 for i in "${!args[@]}"; do
   assert_contains "$out" "ARG[$((i + 12))]=$(quote_arg "${args[$i]}")" "unrelated passthrough argument $i"
@@ -122,10 +125,10 @@ pass 'owned-looking prompts and unrelated config pass through'
 
 parsed="$(env CODEX_JANUS_SOURCE_ONLY=1 bash -c '
   source "$1"
-  codex_parse_arguments -m model-a -c -mconfig exec
-  printf "MODEL=%s HAS=%s COUNT=%d CFG=%s\n" "$CODEX_CALLER_MODEL" "$CODEX_HAS_CALLER_MODEL" "${#CODEX_USER_ARGS[@]}" "${CODEX_USER_ARGS[3]}"
+  codex_parse_arguments -m model-a -c -mconfig -c=-mattached exec
+  printf "MODEL=%s HAS=%s COUNT=%d CFG=%s ATTACHED=%s\n" "$CODEX_CALLER_MODEL" "$CODEX_HAS_CALLER_MODEL" "${#CODEX_USER_ARGS[@]}" "${CODEX_USER_ARGS[3]}" "${CODEX_USER_ARGS[4]}"
 ' _ "$WRAPPER")"
-[[ "$parsed" == 'MODEL=model-a HAS=1 COUNT=5 CFG=-mconfig' ]] || fail "config values must not be parsed as models: $parsed"
+[[ "$parsed" == 'MODEL=model-a HAS=1 COUNT=6 CFG=-mconfig ATTACHED=-c=-mattached' ]] || fail "config values must not be parsed as models: $parsed"
 pass 'model parser skips configuration values'
 
 # Generated TOML and all command construction remain array-safe. The marker
