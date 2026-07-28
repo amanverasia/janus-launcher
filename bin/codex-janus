@@ -221,10 +221,10 @@ fi
 
 CODEX_BIN="$(janus_resolve_client_executable codex "${BASH_SOURCE[0]}" || true)"
 [[ -x "$CODEX_BIN" ]] || { printf 'codex-janus: Codex binary not found\n' >&2; exit 127; }
-codex_parse_arguments "$@" || exit $?
-if ((CODEX_PASSTHROUGH_ONLY)); then
+if janus_is_top_level_passthrough "$@"; then
   exec "$CODEX_BIN" "$@"
 fi
+codex_parse_arguments "$@" || exit $?
 janus_load_validated_service || exit $?
 janus_ui_init 'JANUS LAUNCHER · CODEX'
 if ((CODEX_HAS_CALLER_MODEL)); then
@@ -250,4 +250,11 @@ fi
 codex_build_provider_arguments "$(janus_api_root "$JANUS_BASE_URL")"
 codex_build_command "$CODEX_BIN" "$CODEX_EFFECTIVE_MODEL" "${CODEX_USER_ARGS[@]}" || exit $?
 export JANUS_LAUNCHER_CODEX_API_KEY="$JANUS_API_KEY"
+if [[ "${JANUS_LAUNCHER_DRY_RUN:-}" == 1 ]]; then
+  printf '[dry-run] would exec:'
+  printf ' %q' "${CODEX_COMMAND[@]}"
+  printf '\n'
+  printf '[dry-run] JANUS_LAUNCHER_CODEX_API_KEY=<set>\n'
+  exit 0
+fi
 exec "${CODEX_COMMAND[@]}"

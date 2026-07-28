@@ -26,14 +26,29 @@ if [[ -v JANUS_LAUNCHER_CODEX_API_KEY ]]; then
 else
   printf 'KEY_SET=no KEY_MATCH=no\n'
 fi
+printf 'UNRELATED_ENV=%s\n' "${UNRELATED_ENV-unset}"
+printf 'OPENAI_API_KEY=%s\n' "${OPENAI_API_KEY-unset}"
+secret_names=()
+while IFS='=' read -r name value; do
+  [[ "$value" == "${EXPECTED_CODEX_KEY:-}" ]] && secret_names+=("$name")
+done < <(env)
+IFS=$'\n' secret_names=($(printf '%s\n' "${secret_names[@]}" | sort))
+IFS=,
+printf 'SECRET_ENV_NAMES=%s\n' "${secret_names[*]}"
+[[ -n "${CODEX_TEST_STDERR:-}" ]] && printf '%s\n' "$CODEX_TEST_STDERR" >&2
+exit "${CODEX_TEST_STATUS:-0}"
 SH
 chmod +x "$TMP/bin/codex"
 cat > "$TMP/bin/curl" <<'SH'
 #!/usr/bin/env bash
 for arg in "$@"; do
   case "$arg" in
-    */v1/health) exit 0 ;;
+    */v1/health)
+      printf '%s\n' "$arg" >> "${JANUS_TEST_CURL_LOG:-/dev/null}"
+      exit "${JANUS_TEST_HEALTH_STATUS:-0}"
+      ;;
     */v1/models)
+      printf '%s\n' "$arg" >> "${JANUS_TEST_CURL_LOG:-/dev/null}"
       jq -cn --arg extra "${JANUS_TEST_EXTRA_MODEL:-}" \
         '{data: ([{id:"model-a"}] + if $extra == "" then [] else [{id:$extra}] end)}'
       exit 0
@@ -220,4 +235,104 @@ for contents in missing 'OTHER=model-a' 'MODEL=stale/model'; do
 done
 pass 'noninteractive missing and stale state fail without stdin'
 
-printf 'All Codex launcher Task 6 shell tests passed.\n'
+# Only exact top-level informational requests bypass all Janus configuration and
+# network activity. The full argument vector still reaches the resolved child.
+passthrough_curl_log="$TMP/passthrough-curl.log"
+printf '%s\n' 'not a configuration directory' > "$TMP/config-is-a-file"
+for label in short-help long-help short-version long-version help-subcommand immediate-help; do
+  case "$label" in
+    short-help) args=(-h) ;;
+    long-help) args=(--help) ;;
+    short-version) args=(-V) ;;
+    long-version) args=(--version) ;;
+    help-subcommand) args=(help --verbose) ;;
+    immediate-help) args=(--help -c 'model_provider="other"') ;;
+  esac
+  rm -f "$passthrough_curl_log"
+  out="$(env PATH="$TMP/bin:/usr/bin:/bin" HOME="$TMP/no-home-$label" \
+    JANUS_LAUNCHER_CONFIG_DIR="$TMP/config-is-a-file" \
+    JANUS_TEST_CURL_LOG="$passthrough_curl_log" EXPECTED_CODEX_KEY="$SECRET" \
+    "$WRAPPER" "${args[@]}" 2>&1)"
+  assert_contains "$out" "COUNT=${#args[@]}" "$label argument count"
+  for i in "${!args[@]}"; do
+    assert_contains "$out" "ARG[$i]=$(quote_arg "${args[$i]}")" "$label preserves argument $i"
+  done
+  assert_contains "$out" 'KEY_SET=no KEY_MATCH=no' "$label has no Janus key"
+  [[ ! -s "$passthrough_curl_log" ]] || fail "$label must not invoke curl"
+done
+pass 'exact top-level passthrough bypasses Janus flow'
+
+# The same spelling below a non-help subcommand is not a top-level bypass.
+printf 'MODEL=model-a\n' > "$TMP/config/codex.conf"
+curl_log="$TMP/curl.log"
+rm -f "$curl_log"
+out="$(env "${BASE_ENV[@]}" JANUS_LAUNCHER_BASE_URL=https://janus.test \
+  JANUS_TEST_CURL_LOG="$curl_log" "$WRAPPER" exec --help 2>&1)"
+assert_contains "$out" 'ARG[0]=-c' 'exec --help takes provider flow'
+assert_contains "$out" 'ARG[10]=--model' 'exec --help gets selected model'
+assert_contains "$out" 'ARG[12]=exec' 'exec --help subcommand preserved'
+assert_contains "$out" 'ARG[13]=--help' 'exec --help option preserved'
+mapfile -t contacted < "$curl_log"
+[[ ${#contacted[@]} -eq 2 ]] || fail "Janus flow must contact exactly two endpoints: ${contacted[*]-}"
+[[ "${contacted[0]}" == 'https://janus.test/v1/health' ]] || fail "first endpoint must be health: ${contacted[0]}"
+[[ "${contacted[1]}" == 'https://janus.test/v1/models' ]] || fail "second endpoint must be models: ${contacted[1]}"
+! grep -q '/responses' "$curl_log" || fail 'launcher must not probe the Responses generation endpoint'
+pass 'full Janus flow ordering and non-generation probes'
+
+# The real client is resolved before either bypass or Janus setup.
+missing_path="$TMP/missing-bin"
+mkdir -p "$missing_path"
+set +e
+missing_out="$(env PATH="$missing_path:/usr/bin:/bin" HOME="$TMP/missing-home" \
+  JANUS_LAUNCHER_CONFIG_DIR="$TMP/missing-config" "$WRAPPER" --help 2>&1)"
+missing_rc=$?
+set -e
+[[ $missing_rc -eq 127 ]] || fail "absent Codex must return 127, got $missing_rc"
+assert_contains "$missing_out" 'Codex binary not found' 'absent Codex diagnostic'
+pass 'Codex executable resolution precedes launch flow'
+
+# Real launches use exec: the child's status and stderr arrive unchanged.
+set +e
+child_out="$(env "${BASE_ENV[@]}" JANUS_LAUNCHER_BASE_URL=https://janus.test \
+  CODEX_TEST_STATUS=37 CODEX_TEST_STDERR='codex endpoint diagnostic marker' \
+  "$WRAPPER" exec prompt 2>&1)"
+child_rc=$?
+set -e
+[[ $child_rc -eq 37 ]] || fail "Codex child status must propagate, got $child_rc"
+assert_contains "$child_out" 'codex endpoint diagnostic marker' 'Codex endpoint diagnostic passthrough'
+pass 'child status and stderr propagate unchanged'
+
+# Launch configuration is temporary. Preserve the user's Codex config, avoid
+# profiles, preserve unrelated environment, and expose the secret under only
+# the custom provider's configured key.
+user_codex_config="$TMP/home/.codex/config.toml"
+mkdir -p "$(dirname -- "$user_codex_config")"
+printf '%s\n' 'model = "ordinary-user-model"' '[profiles.personal]' > "$user_codex_config"
+config_before="$(sha256sum "$user_codex_config")"
+out="$(env "${BASE_ENV[@]}" JANUS_LAUNCHER_BASE_URL=https://janus.test \
+  UNRELATED_ENV=keep-me OPENAI_API_KEY=ordinary-openai-value "$WRAPPER" exec prompt 2>&1)"
+config_after="$(sha256sum "$user_codex_config")"
+[[ "$config_before" == "$config_after" ]] || fail '~/.codex/config.toml must remain untouched'
+assert_not_contains "$out" '--profile' 'launcher must not generate a Codex profile'
+assert_contains "$out" 'UNRELATED_ENV=keep-me' 'unrelated environment preserved'
+assert_contains "$out" 'OPENAI_API_KEY=ordinary-openai-value' 'unrelated OpenAI environment preserved'
+assert_contains "$out" 'SECRET_ENV_NAMES=EXPECTED_CODEX_KEY,JANUS_LAUNCHER_API_KEY,JANUS_LAUNCHER_CODEX_API_KEY' 'custom provider key is the only new secret environment name'
+pass 'temporary provider leaves user Codex state and unrelated environment untouched'
+
+# Dry runs contain the exact array construction and a set marker, but neither
+# invoke Codex nor reveal the secret value.
+dry_curl_log="$TMP/dry-curl.log"
+rm -f "$dry_curl_log"
+out="$(env "${BASE_ENV[@]}" JANUS_LAUNCHER_BASE_URL=https://janus.test \
+  JANUS_TEST_CURL_LOG="$dry_curl_log" JANUS_LAUNCHER_DRY_RUN=1 \
+  CODEX_TEST_STDERR='must not execute child' "$WRAPPER" exec 'prompt text' 2>&1)"
+assert_contains "$out" '[dry-run] would exec:' 'dry-run command marker'
+assert_contains "$out" 'JANUS_LAUNCHER_CODEX_API_KEY=<set>' 'dry-run key marker'
+assert_contains "$out" 'model_provider=\"janus\"' 'dry-run provider selection'
+assert_contains "$out" 'exec prompt\ text' 'dry-run caller ordering'
+assert_not_contains "$out" "$SECRET" 'dry-run secret redaction'
+assert_not_contains "$out" 'must not execute child' 'dry-run skips child execution'
+[[ "$(wc -l < "$dry_curl_log")" -eq 2 ]] || fail 'dry-run must still perform health and one catalog fetch'
+pass 'dry-run redacts secret and does not execute Codex'
+
+printf 'All Codex launcher Task 7 shell tests passed.\n'
