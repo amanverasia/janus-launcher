@@ -17,15 +17,18 @@ umask 077
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -f "$ROOT_DIR/lib/janus_api.sh" ]]; then
-  # shellcheck source=lib/janus_api.sh
-  source "$ROOT_DIR/lib/janus_api.sh"
+  JANUS_LIB_DIR="$ROOT_DIR/lib"
 elif [[ -f "$SCRIPT_DIR/../lib/janus_api.sh" ]]; then
-  # shellcheck source=../lib/janus_api.sh
-  source "$SCRIPT_DIR/../lib/janus_api.sh"
-elif [[ -f "${XDG_DATA_HOME:-$HOME/.local/share}/claude-janus/lib/janus_api.sh" ]]; then
-  # shellcheck disable=SC1091
-  source "${XDG_DATA_HOME:-$HOME/.local/share}/claude-janus/lib/janus_api.sh"
+  JANUS_LIB_DIR="$SCRIPT_DIR/../lib"
+else
+  JANUS_LIB_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/claude-janus/lib"
 fi
+# shellcheck source=lib/janus_api.sh
+source "$JANUS_LIB_DIR/janus_api.sh"
+# shellcheck source=lib/janus_runtime.sh
+source "$JANUS_LIB_DIR/janus_runtime.sh"
+# shellcheck source=lib/janus_ui.sh
+source "$JANUS_LIB_DIR/janus_ui.sh"
 
 # ---- Janus connection -------------------------------------------------------
 # Keep credentials out of this script. Environment variables take precedence
@@ -50,9 +53,7 @@ JANUS_BASE_URL="${ENV_JANUS_BASE_URL:-$CONFIG_JANUS_BASE_URL}"
 JANUS_API_KEY="${ENV_JANUS_API_KEY:-$CONFIG_JANUS_API_KEY}"
 
 BYPASS_ROUTER_CONFIG=0
-for arg in "$@"; do
-  case "$arg" in -h|--help|-v|--version) BYPASS_ROUTER_CONFIG=1 ;; esac
-done
+janus_is_top_level_passthrough "$@" && BYPASS_ROUTER_CONFIG=1
 
 if [[ -t 2 && -z "${NO_COLOR:-}" ]]; then
   RESET=$'\033[0m'; BOLD=$'\033[1m'
@@ -212,178 +213,27 @@ load_config
 # ---- Terminal UI ------------------------------------------------------------
 # Full-screen menus are enabled only for an actual interactive terminal. Piped
 # input, dry-runs, --help, and CLAUDE_JANUS_TIER automation stay scroll-safe.
-UI_ENABLED=0
 MENU_USED=0
-if [[ -t 0 && -t 2 && -z "${CLAUDE_JANUS_DRYRUN:-}" ]]; then
-  UI_ENABLED=1
+if [[ -n "${CLAUDE_JANUS_DRYRUN:-}" ]]; then
+  JANUS_UI_DISABLE=1
 fi
+janus_ui_init 'CLAUDE CODE · OFFICIAL JANUS COMPANION'
+UI_ENABLED="$JANUS_UI_ENABLED"
 
-if [[ -t 2 && -z "${NO_COLOR:-}" ]]; then
-  RESET=$'\033[0m'; BOLD=$'\033[1m'; DIM=$'\033[2m'
-  CYAN=$'\033[36m'; BLUE=$'\033[34m'; GREEN=$'\033[32m'
-  YELLOW=$'\033[33m'; RED=$'\033[31m'; MAGENTA=$'\033[35m'
-else
-  RESET=""; BOLD=""; DIM=""; CYAN=""; BLUE=""; GREEN=""
-  YELLOW=""; RED=""; MAGENTA=""
-fi
-
-# Keep the terminal non-canonical/no-echo for the complete render→keypress
-# cycle. Using `read -s` alone leaves a tiny race where escape bytes can echo
-# after the menu is drawn but before read starts.
-MENU_TTY_ORIGINAL=""
-MENU_TTY_RAW=0
-if [[ $UI_ENABLED -eq 1 ]]; then
-  MENU_TTY_ORIGINAL="$(stty -g 2>/dev/null || true)"
-fi
-
-menu_tty_raw() {
-  [[ $UI_ENABLED -eq 1 && $MENU_TTY_RAW -eq 0 && -n "$MENU_TTY_ORIGINAL" ]] || return 0
-  stty -echo -icanon min 1 time 0 2>/dev/null || return 0
-  MENU_TTY_RAW=1
-}
-
-menu_tty_restore() {
-  [[ $MENU_TTY_RAW -eq 1 && -n "$MENU_TTY_ORIGINAL" ]] || return 0
-  stty "$MENU_TTY_ORIGINAL" 2>/dev/null || true
-  MENU_TTY_RAW=0
-}
-
-trap 'menu_tty_restore' EXIT
-trap 'menu_tty_restore; exit 130' INT
-trap 'menu_tty_restore; exit 143' TERM HUP
-
-# Decode one terminal key without echoing escape bytes into the prompt.
-# Result is returned in MENU_KEY: up/down/left/right/home/end/enter/esc, or the
-# literal shortcut character. This is used only when UI_ENABLED=1.
-read_menu_key() {
-  local key="" suffix=""
-  MENU_KEY=""
-  if ! IFS= read -rsn1 key; then
-    MENU_KEY="esc"
-    return 0
-  fi
-
-  case "$key" in
-    "") MENU_KEY="enter" ;;
-    $'\033')
-      # Plain arrows are ESC [ A/B/C/D (some terminals send ESC O A/B/C/D).
-      IFS= read -rsn2 -t 0.12 suffix || true
-      case "$suffix" in
-        '[A'|'OA') MENU_KEY="up" ;;
-        '[B'|'OB') MENU_KEY="down" ;;
-        '[C'|'OC') MENU_KEY="right" ;;
-        '[D'|'OD') MENU_KEY="left" ;;
-        '[H'|'OH') MENU_KEY="home" ;;
-        '[F'|'OF') MENU_KEY="end" ;;
-        *) MENU_KEY="esc" ;;
-      esac
-      ;;
-    *) MENU_KEY="$key" ;;
-  esac
-}
-
-# Drive a full-screen menu renderer with arrow keys. The renderer receives the
-# highlighted 1-based row followed by any extra arguments. Selection is placed
-# in MENU_RESULT; Esc/Q/B return "back". Number shortcuts remain available.
+# Compatibility names keep the existing Claude-specific call sites unchanged
+# while terminal state and rendering live behind the shared UI boundary.
+menu_tty_raw() { janus_ui_tty_raw; }
+menu_tty_restore() { janus_ui_tty_restore; }
+read_menu_key() { janus_ui_read_key; MENU_KEY="$JANUS_UI_KEY"; }
 menu_navigate() {
-  local count="$1" cursor="$2" renderer="$3" shortcuts="$4"
-  local i pressed MENU_REDRAW_IN_PLACE=0
-  shift 4
-  MENU_RESULT=""
-  menu_tty_raw
-  while true; do
-    "$renderer" "$cursor" "$@"
-    read_menu_key
-    case "$MENU_KEY" in
-      up)   (( cursor = cursor <= 1 ? count : cursor - 1 )); MENU_REDRAW_IN_PLACE=1 ;;
-      down) (( cursor = cursor >= count ? 1 : cursor + 1 )); MENU_REDRAW_IN_PLACE=1 ;;
-      home) cursor=1; MENU_REDRAW_IN_PLACE=1 ;;
-      end)  cursor="$count"; MENU_REDRAW_IN_PLACE=1 ;;
-      left|right) ;; # safely consume; never print escape sequences
-      enter)
-        MENU_RESULT="$cursor"
-        menu_tty_restore
-        return 0
-        ;;
-      esc|q|Q|b|B)
-        MENU_RESULT="back"
-        menu_tty_restore
-        return 0
-        ;;
-      [1-9])
-        if (( 10#$MENU_KEY <= count )); then
-          MENU_RESULT="$MENU_KEY"
-          menu_tty_restore
-          return 0
-        fi
-        printf '\a' >&2
-        ;;
-      *)
-        pressed="${MENU_KEY,,}"
-        for ((i=0; i<${#shortcuts}; i++)); do
-          if [[ "$pressed" == "${shortcuts:i:1}" ]]; then
-            MENU_RESULT="$((i + 1))"
-            menu_tty_restore
-            return 0
-          fi
-        done
-        printf '\a' >&2
-        ;;
-    esac
-  done
+  janus_ui_navigate "$@"
+  MENU_RESULT="$JANUS_UI_RESULT"
 }
-
-clear_screen() {
-  [[ $UI_ENABLED -eq 1 ]] || return 0
-  printf '\033[2J\033[H' >&2
-}
-
-prepare_screen() {
-  [[ $UI_ENABLED -eq 1 ]] || return 0
-  if [[ ${MENU_REDRAW_IN_PLACE:-0} -eq 1 ]]; then
-    # Keep the previous frame visible while repainting navigation changes.
-    printf '\033[H' >&2
-  else
-    clear_screen
-  fi
-}
-
-screen_header() {
-  local title="$1" subtitle="${2:-}"
-  prepare_screen
-  printf '%s╭─ CLAUDE CODE · OFFICIAL JANUS COMPANION ─────────────────────────%s\n' "$CYAN" "$RESET" >&2
-  printf '│ %s%s%s\n' "$BOLD" "$title" "$RESET" >&2
-  [[ -z "$subtitle" ]] || printf '│ %s%s%s\n' "$DIM" "$subtitle" "$RESET" >&2
-  printf '%s╰───────────────────────────────────────────────────────────────────%s\n\n' "$CYAN" "$RESET" >&2
-}
-
-pause_screen() {
-  [[ $UI_ENABLED -eq 1 ]] || return 0
-  menu_tty_raw
-  printf '\n%sPress any key to continue…%s ' "$DIM" "$RESET" >&2
-  read_menu_key
-  menu_tty_restore
-}
-
-show_message() {
-  local kind="$1" title="$2" message="$3" color icon
-  case "$kind" in
-    success) color="$GREEN"; icon='✓' ;;
-    warning) color="$YELLOW"; icon='!' ;;
-    error)   color="$RED"; icon='×' ;;
-    *)       color="$CYAN"; icon='•' ;;
-  esac
-  if [[ $UI_ENABLED -eq 1 ]]; then
-    # Enter no-echo mode before drawing so even an immediate keypress cannot
-    # race with the confirmation prompt and become visible text.
-    menu_tty_raw
-    screen_header "$title"
-    printf '  %s%s%s  %s\n' "$color$BOLD" "$icon" "$RESET" "$message" >&2
-    pause_screen
-  else
-    printf '%s%s:%s %s\n' "$color$BOLD" "$title" "$RESET" "$message" >&2
-  fi
-}
+clear_screen() { janus_ui_clear; }
+prepare_screen() { janus_ui_prepare_screen; }
+screen_header() { janus_ui_header "$@"; }
+pause_screen() { janus_ui_pause; }
+show_message() { janus_ui_message "$@"; }
 
 model_label() {
   case "$1" in
@@ -446,19 +296,7 @@ print_mappings() {
   print_mapping_row subagent "$SUBAGENT_MODEL"
 }
 
-menu_choice() {
-  local cursor="$1" index="$2" shortcut="$3" label="$4" suffix="${5:-}"
-  local marker=' '
-  if (( cursor == index )); then
-    marker="${CYAN}${BOLD}❯${RESET}"
-    printf '  %s  %s[%s]%s  %s%s%s' \
-      "$marker" "$CYAN$BOLD" "$shortcut" "$RESET" "$BOLD" "$label" "$RESET" >&2
-  else
-    printf '     %s[%s]%s  %s' "$DIM" "$shortcut" "$RESET" "$label" >&2
-  fi
-  [[ -z "$suffix" ]] || printf '  %s' "$suffix" >&2
-  printf '\n' >&2
-}
+menu_choice() { janus_ui_choice "$@"; }
 
 print_model_option() {
   local cursor="$1" number="$2" label="$3" model="$4" note="${5:-}"
@@ -842,8 +680,7 @@ export ANTHROPIC_DEFAULT_SONNET_MODEL="$SONNET_MODEL"
 export ANTHROPIC_DEFAULT_HAIKU_MODEL="$HAIKU_MODEL"
 export CLAUDE_CODE_SUBAGENT_MODEL="$SUBAGENT_MODEL"
 
-CLAUDE_BIN="$(command -v claude 2>/dev/null || true)"
-[[ -z "$CLAUDE_BIN" || "$CLAUDE_BIN" == *"claude-janus" ]] && CLAUDE_BIN="$HOME/.local/bin/claude"
+CLAUDE_BIN="$(janus_resolve_client_executable claude "${BASH_SOURCE[0]}" || true)"
 [[ -x "$CLAUDE_BIN" ]] || { printf 'claude-janus: Claude Code binary not found\n' >&2; exit 127; }
 
 command=("$CLAUDE_BIN")
