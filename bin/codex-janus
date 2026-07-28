@@ -26,10 +26,13 @@ codex_valid_model_value() {
 }
 
 codex_load_model() {
-  local file="$1" line value
+  local file="$1" line value raw_bytes visible_bytes
   CODEX_SAVED_MODEL=''
   [[ -f "$file" ]] || return 1
   IFS= read -r line < "$file" || [[ -n "$line" ]] || return 1
+  raw_bytes="$(wc -c < "$file")" || return 1
+  visible_bytes="$(LC_ALL=C printf '%s\n' "$line" | wc -c)" || return 1
+  [[ "$raw_bytes" -eq "$visible_bytes" ]] || return 1
   [[ "$line" == MODEL=* ]] || return 1
   value="${line#MODEL=}"
   codex_valid_model_value "$value" || return 1

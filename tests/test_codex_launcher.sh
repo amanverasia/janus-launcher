@@ -185,6 +185,9 @@ for invalid in $'provider/model\nother' $'provider/model\rother'; do
   source_codex codex_save_model "$state" "$invalid" >/dev/null 2>&1 &&
     fail 'newline or carriage-return model persisted'
 done
+printf 'MODEL=bad\0model\n' > "$state"
+source_codex codex_load_model "$state" >/dev/null 2>&1 &&
+  fail 'persisted model containing raw NUL accepted after Bash truncation'
 pass 'missing malformed duplicate and control-byte state rejected'
 
 ordinary_catalog='{"data":[{"id":"provider/name.with:dash_under score=high=exact"}]}'
