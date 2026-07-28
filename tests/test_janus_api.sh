@@ -6,30 +6,53 @@ source "$ROOT/lib/janus_api.sh"
 
 pass() { printf 'PASS %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1" >&2; exit 1; }
+assert_eq() {
+  [[ "$1" == "$2" ]] || fail "$3: expected '$2', got '$1'"
+}
 
-[[ "$(janus_normalize_base_url 'http://localhost:20128/v1/')" == 'http://localhost:20128' ]] \
-  || fail "normalize strips /v1/"
-pass "normalize strips /v1/"
+for case in \
+  'https://janus.test|https://janus.test/v1' \
+  'https://janus.test/|https://janus.test/v1' \
+  'https://janus.test/v1|https://janus.test/v1' \
+  'https://janus.test/v1/|https://janus.test/v1'
+do
+  IFS='|' read -r input expected <<<"$case"
+  assert_eq "$(janus_api_root "$input")" "$expected" "api root for $input"
+done
+pass "API root normalization"
 
-ids="$(janus_extract_model_ids "$(cat "$ROOT/tests/fixtures/models_openai.json")")"
+! janus_catalog_validate_json 'not-json' || fail "plain text should be invalid"
+! janus_catalog_validate_json '{}' || fail "missing data should be invalid"
+! janus_catalog_validate_json '{"data":{}}' || fail "non-array data should be invalid"
+! janus_catalog_validate_json '{"data":[{"id":7}]}' || fail "non-string ID should be invalid"
+! janus_catalog_validate_json '{"data":[{"id":""}]}' || fail "empty ID should be invalid"
+janus_catalog_validate_json '{"data":[{"id":"provider/model"}]}' \
+  || fail "string model ID should be valid"
+pass "catalog schema validation"
+
+ids="$(janus_extract_model_ids "$(<"$ROOT/tests/fixtures/models_openai.json")")"
 printf '%s\n' "$ids" | grep -qx 'deepseek/deepseek-v4-pro' || fail "openai extract"
 pass "openai extract"
 
-ids="$(janus_extract_model_ids "$(cat "$ROOT/tests/fixtures/models_anthropic.json")")"
+ids="$(janus_extract_model_ids "$(<"$ROOT/tests/fixtures/models_anthropic.json")")"
 printf '%s\n' "$ids" | grep -qx 'claude-sonnet-4' || fail "anthropic extract"
 pass "anthropic extract"
 
-janus_catalog_contains "$(cat "$ROOT/tests/fixtures/models_openai.json")" 'combo-fast' \
+! janus_extract_model_ids '{"data":{}}' >/dev/null \
+  || fail "extract should reject malformed catalog"
+pass "extract rejects malformed catalog"
+
+janus_catalog_contains "$(<"$ROOT/tests/fixtures/models_openai.json")" 'combo-fast' \
   || fail "contains combo"
-! janus_catalog_contains "$(cat "$ROOT/tests/fixtures/models_openai.json")" 'missing/x' \
+! janus_catalog_contains "$(<"$ROOT/tests/fixtures/models_openai.json")" 'combo' \
+  || fail "partial ID should not match"
+! janus_catalog_contains "$(<"$ROOT/tests/fixtures/models_openai.json")" 'missing/x' \
   || fail "missing should fail"
-pass "catalog contains"
+! janus_catalog_contains '{"data":{}}' 'combo-fast' \
+  || fail "contains should reject malformed catalog"
+pass "catalog contains exact ID"
 
-json="$(cat "$ROOT/tests/fixtures/models_openai.json")"
-janus_catalog_contains "$json" 'deepseek/deepseek-v4-pro' || fail "preset in fixture"
-pass "preset intersection helper"
-
-ids="$(janus_extract_model_ids "$(cat "$ROOT/tests/fixtures/models_empty.json")")"
+ids="$(janus_extract_model_ids "$(<"$ROOT/tests/fixtures/models_empty.json")")"
 [[ -z "$ids" ]] || fail "empty catalog extract"
 pass "empty catalog extract"
 
@@ -37,24 +60,75 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$TMP/fake-bin"
 cat > "$TMP/fake-bin/curl" <<'SH'
-#!/usr/bin/env bash
-for arg in "$@"; do
-  [[ "$arg" == */v1/health ]] && exit 0
-  [[ "$arg" == */v1/models ]] && {
-    cat <<'JSON'
-{"object":"list","data":[]}
-JSON
+#!/bin/bash
+{
+  printf '%s\n' '--- invocation ---'
+  printf '%s\n' "$@"
+} >> "$CURL_LOG"
+
+url="${!#}"
+case "$url" in
+  */v1/health)
+    [[ "${CURL_MODE:-success}" != health-failure ]] || exit 22
     exit 0
-  }
-done
-exit 7
+    ;;
+  */v1/models)
+    case "${CURL_MODE:-success}" in
+      models-failure) exit 28 ;;
+      malformed) printf '%s\n' 'not-json' ;;
+      empty) printf '%s\n' '{"object":"list","data":[]}' ;;
+      success) printf '%s\n' '{"object":"list","data":[{"id":"provider/model"}]}' ;;
+    esac
+    ;;
+  *) exit 7 ;;
+esac
 SH
 chmod +x "$TMP/fake-bin/curl"
+REAL_PATH="$PATH"
+TEST_PATH="$TMP/fake-bin:$REAL_PATH"
+export CURL_LOG="$TMP/curl.log"
+
+run_validation() {
+  local mode="$1"
+  set +e
+  validation_output="$(CURL_MODE="$mode" PATH="$TEST_PATH" janus_validate_service \
+    'https://janus.test/v1/' 'test-key' 2>"$TMP/validation.err")"
+  validation_rc=$?
+  set -e
+}
+
+run_validation health-failure
+assert_eq "$validation_rc" '1' "health failure status"
+
+run_validation models-failure
+assert_eq "$validation_rc" '2' "catalog transport failure status"
+
+run_validation malformed
+assert_eq "$validation_rc" '3' "malformed catalog status"
+
+run_validation empty
+assert_eq "$validation_rc" '4' "empty catalog status"
+
+: > "$CURL_LOG"
+run_validation success
+assert_eq "$validation_rc" '0' "successful validation status"
+assert_eq "$validation_output" '{"object":"list","data":[{"id":"provider/model"}]}' \
+  "successful validation output"
+assert_eq "$(grep -cFx 'https://janus.test/v1/models' "$CURL_LOG")" '1' \
+  "models endpoint call count"
+grep -qFx 'Authorization: Bearer test-key' "$CURL_LOG" \
+  || fail "catalog request authorization"
+grep -qE '^janus-launcher/' "$CURL_LOG" || fail "Janus Launcher user agent"
+! grep -E 'https?://.*test-key' "$CURL_LOG" >/dev/null \
+  || fail "API key must not appear in URL"
+pass "service validation status and request contract"
+
 set +e
-PATH="$TMP/fake-bin:/usr/bin:/bin" janus_check_health 'http://empty.example' 'k'
-empty_rc=$?
+PATH="$TMP/fake-bin" janus_validate_service 'https://janus.test' 'test-key' \
+  >/dev/null 2>"$TMP/missing.err"
+missing_rc=$?
 set -e
-[[ $empty_rc -eq 2 ]] || fail "empty models health check"
-pass "empty models health check"
+assert_eq "$missing_rc" '127' "missing jq status"
+pass "missing dependency status"
 
 printf 'All janus_api unit tests passed.\n'
