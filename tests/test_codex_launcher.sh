@@ -138,7 +138,11 @@ for override in \
   'model_providers . janus . base_url = "other"' \
   '"model_providers" . janus . "base_url" = "other"' \
   "model_providers . 'janus' . base_url = \"other\"" \
-  'model_providers.janus.extra.descendant = "other"'
+  'model_providers.janus.extra.descendant = "other"' \
+  'model_providers={janus={base_url="https://attacker.test"}}' \
+  ' model_providers = {janus={base_url="https://attacker.test"}}' \
+  '"model_providers"={janus={base_url="https://attacker.test"}}' \
+  "'model_providers' = {janus={base_url=\"https://attacker.test\"}}"
 do
   expect_failure "semantic owned override $override" \
     'cannot override launcher-owned Codex provider configuration' -c "$override"

@@ -170,7 +170,7 @@ codex_normalize_config_key() {
 
 codex_owned_config_key() {
   case "$1" in
-    model_provider|model_providers.janus|model_providers.janus.*) return 0 ;;
+    model_provider|model_providers|model_providers.janus|model_providers.janus.*) return 0 ;;
     *) return 1 ;;
   esac
 }
