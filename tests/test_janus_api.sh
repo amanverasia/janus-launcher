@@ -77,6 +77,7 @@ case "$url" in
       models-failure) exit 28 ;;
       malformed) printf '%s\n' 'not-json' ;;
       empty) printf '%s\n' '{"object":"list","data":[]}' ;;
+      newline-id) printf '%s\n' '{"object":"list","data":[{"id":"\n"}]}' ;;
       success) printf '%s\n' '{"object":"list","data":[{"id":"provider/model"}]}' ;;
     esac
     ;;
@@ -108,6 +109,11 @@ assert_eq "$validation_rc" '3' "malformed catalog status"
 
 run_validation empty
 assert_eq "$validation_rc" '4' "empty catalog status"
+
+run_validation newline-id
+assert_eq "$validation_rc" '0' "nonempty catalog with newline ID status"
+assert_eq "$validation_output" '{"object":"list","data":[{"id":"\n"}]}' \
+  "nonempty catalog with newline ID output"
 
 : > "$CURL_LOG"
 run_validation success

@@ -48,7 +48,7 @@ janus_fetch_catalog() {
 }
 
 janus_validate_service() {
-  local base="$1" key="$2" body ids rc
+  local base="$1" key="$2" body rc
   command -v curl >/dev/null 2>&1 || {
     printf 'Janus Launcher requires curl.\n' >&2
     return 127
@@ -72,12 +72,7 @@ janus_validate_service() {
     [[ $rc -eq 127 ]] && return 127
     return 3
   }
-  ids="$(janus_extract_model_ids "$body")" || {
-    rc=$?
-    [[ $rc -eq 127 ]] && return 127
-    return 3
-  }
-  [[ -n "$ids" ]] || return 4
+  jq -e '.data | length > 0' >/dev/null 2>&1 <<<"$body" || return 4
   printf '%s\n' "$body"
 }
 
