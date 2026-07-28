@@ -171,21 +171,22 @@ pass "noninteractive first setup"
 
 mkdir -p "$TMP/setup-failure/router.conf"
 JANUS_ROUTER_CONFIG="$TMP/setup-failure/router.conf"
-unset JANUS_BASE_URL JANUS_API_KEY
+JANUS_BASE_URL='https://existing.janus.test'
+JANUS_API_KEY='existing-secret'
 if JANUS_LAUNCHER_SETUP_BASE_URL='https://failed-setup.janus.test/v1/' \
   JANUS_LAUNCHER_SETUP_API_KEY='failed-setup-secret' \
   janus_config_run_first_setup \
   >"$TMP/setup-failure.out" 2>"$TMP/setup-failure.err"; then
   fail "first setup succeeded when persistence failed"
 fi
-[[ ! ${JANUS_BASE_URL+x} ]] \
-  || fail "first setup set JANUS_BASE_URL after persistence failure"
-[[ ! ${JANUS_API_KEY+x} ]] \
-  || fail "first setup set JANUS_API_KEY after persistence failure"
+assert_eq "$JANUS_BASE_URL" 'https://existing.janus.test' \
+  "first setup preserved existing base URL after persistence failure"
+assert_eq "$JANUS_API_KEY" 'existing-secret' \
+  "first setup preserved existing API key after persistence failure"
 if find "$TMP/setup-failure" -mindepth 1 \
   \( -type f -o -type l \) | grep -q .; then
   fail "failed first setup left temporary files"
 fi
-pass "first setup leaves credentials unset on persistence failure"
+pass "first setup preserves credentials on persistence failure"
 
 printf 'All janus_config unit tests passed.\n'
