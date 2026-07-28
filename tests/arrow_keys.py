@@ -16,14 +16,22 @@ tmp = Path(tempfile.mkdtemp(prefix="claude-janus-arrow-test-"))
 fake = tmp / "bin" / "claude"
 fake.write_text("#!/usr/bin/env bash\nprintf 'ARGS:'; printf ' <%s>' \"$@\"; echo\n")
 fake.chmod(0o755)
+fake_curl = tmp / "bin" / "curl"
+fake_curl.write_text(
+    "#!/usr/bin/env bash\n"
+    "for arg in \"$@\"; do\n"
+    "  [[ \"$arg\" == */v1/health ]] && exit 0\n"
+    "  [[ \"$arg\" == */v1/models ]] && printf '%s\\n' '{\"data\":[{\"id\":\"openrouter/anthropic/claude-opus-4.8\"},{\"id\":\"deepseek/deepseek-v4-pro\"},{\"id\":\"zhipu/glm-4.7\"}]}' && exit 0\n"
+    "done\nexit 7\n"
+)
+fake_curl.chmod(0o755)
 
 env = os.environ.copy()
 env.update(
     PATH=f"{tmp / 'bin'}:/usr/bin:/bin",
-    XDG_CONFIG_HOME=str(tmp / "config"),
-    JANUS_BASE_URL="https://router.example",
-    JANUS_API_KEY="test-key",
-    CLAUDE_JANUS_SKIP_CHECK="1",
+    JANUS_LAUNCHER_CONFIG_DIR=str(tmp / "config" / "janus-launcher"),
+    JANUS_LAUNCHER_BASE_URL="https://router.example",
+    JANUS_LAUNCHER_API_KEY="test-key",
     TERM="xterm-256color",
 )
 

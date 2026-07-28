@@ -9,8 +9,8 @@
 # untouched. Janus variables apply only to the launched Claude Code process.
 #
 # Automation:
-#   CLAUDE_JANUS_TIER=sonnet claude-janus -p "hello"
-#   CLAUDE_JANUS_DRYRUN=1 CLAUDE_JANUS_TIER=haiku claude-janus
+#   JANUS_LAUNCHER_CLAUDE_TIER=sonnet claude-janus -p "hello"
+#   JANUS_LAUNCHER_DRY_RUN=1 JANUS_LAUNCHER_CLAUDE_TIER=haiku claude-janus
 set -euo pipefail
 umask 077
 
@@ -25,41 +25,20 @@ else
 fi
 # shellcheck source=lib/janus_api.sh
 source "$JANUS_LIB_DIR/janus_api.sh"
+# shellcheck source=lib/janus_config.sh
+source "$JANUS_LIB_DIR/janus_config.sh"
 # shellcheck source=lib/janus_runtime.sh
 source "$JANUS_LIB_DIR/janus_runtime.sh"
 # shellcheck source=lib/janus_ui.sh
 source "$JANUS_LIB_DIR/janus_ui.sh"
 
-# ---- Janus connection -------------------------------------------------------
-# Keep credentials out of this script. Environment variables take precedence
-# over the local config file so CI and one-off sessions require no disk secret.
-ROUTER_CONFIG="${CLAUDE_JANUS_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/claude-janus/router.conf}"
-ENV_JANUS_BASE_URL="${JANUS_BASE_URL:-}"
-ENV_JANUS_API_KEY="${JANUS_API_KEY:-}"
-CONFIG_JANUS_BASE_URL=""
-CONFIG_JANUS_API_KEY=""
-
-if [[ -f "$ROUTER_CONFIG" ]]; then
-  while IFS='=' read -r key value || [[ -n "${key:-}" ]]; do
-    [[ -z "$key" || "$key" == \#* ]] && continue
-    case "$key" in
-      JANUS_BASE_URL) CONFIG_JANUS_BASE_URL="$value" ;;
-      JANUS_API_KEY)  CONFIG_JANUS_API_KEY="$value" ;;
-    esac
-  done < "$ROUTER_CONFIG"
+CLAUDE_BIN="$(janus_resolve_client_executable claude "${BASH_SOURCE[0]}" || true)"
+[[ -x "$CLAUDE_BIN" ]] || { printf 'claude-janus: Claude Code binary not found\n' >&2; exit 127; }
+if janus_is_top_level_passthrough "$@"; then
+  exec "$CLAUDE_BIN" "$@"
 fi
 
-JANUS_BASE_URL="${ENV_JANUS_BASE_URL:-$CONFIG_JANUS_BASE_URL}"
-JANUS_API_KEY="${ENV_JANUS_API_KEY:-$CONFIG_JANUS_API_KEY}"
-
-BYPASS_ROUTER_CONFIG=0
-janus_is_top_level_passthrough "$@" && BYPASS_ROUTER_CONFIG=1
-
-if [[ -t 2 && -z "${NO_COLOR:-}" ]]; then
-  RESET=$'\033[0m'; BOLD=$'\033[1m'
-else
-  RESET=""; BOLD=""
-fi
+janus_load_validated_service || exit $?
 
 read_reply() {
   local answer=""
@@ -73,70 +52,6 @@ read_reply() {
   fi
   printf '%s' "$answer"
 }
-
-is_placeholder_config() {
-  [[ -z "$JANUS_BASE_URL" || -z "$JANUS_API_KEY" ||
-    "$JANUS_BASE_URL" == *'your-janus-router.example'* ||
-    "$JANUS_API_KEY" == 'replace-with-your-key' ]]
-}
-
-write_router_config() {
-  local base key dest
-  base="$(janus_normalize_base_url "$1")"
-  key="$2"
-  dest="$3"
-  mkdir -p "$(dirname -- "$dest")"
-  umask 077
-  printf 'JANUS_BASE_URL=%s\nJANUS_API_KEY=%s\n' "$base" "$key" > "$dest"
-  chmod 600 "$dest" 2>/dev/null || true
-}
-
-run_first_run_setup() {
-  local base key probe
-  if [[ -n "${CLAUDE_JANUS_SETUP_BASE_URL:-}" && -n "${CLAUDE_JANUS_SETUP_API_KEY:-}" ]]; then
-    write_router_config "$CLAUDE_JANUS_SETUP_BASE_URL" "$CLAUDE_JANUS_SETUP_API_KEY" "$ROUTER_CONFIG"
-    JANUS_BASE_URL="$(janus_normalize_base_url "$CLAUDE_JANUS_SETUP_BASE_URL")"
-    JANUS_API_KEY="$CLAUDE_JANUS_SETUP_API_KEY"
-    return 0
-  fi
-  if [[ ! -t 0 || ! -t 2 ]]; then
-    printf 'claude-janus: router configuration is missing or still uses placeholders\n' >&2
-    printf 'Create %s or export JANUS_BASE_URL and JANUS_API_KEY.\n' "$ROUTER_CONFIG" >&2
-    exit 2
-  fi
-  printf '%sFirst-run setup%s\n\n' "$BOLD" "$RESET" >&2
-  for probe in 'http://127.0.0.1:20128' 'http://localhost:20128'; do
-    if curl -fsS -o /dev/null --max-time 1 -A 'claude-janus/1.0' "$probe/v1/health" 2>/dev/null; then
-      printf 'Detected local Janus at %s\n' "$probe" >&2
-      printf 'Use it? [Y/n]: ' >&2
-      reply="$(read_reply)"
-      case "$reply" in ''|y|Y|yes|Yes)
-        base="$probe"
-        break
-        ;;
-      esac
-    fi
-  done
-  if [[ -z "${base:-}" ]]; then
-    printf 'Janus base URL (no /v1 required): ' >&2
-    base="$(read_reply)"
-  fi
-  printf 'Janus API key: ' >&2
-  key="$(read_reply)"
-  if [[ -z "$base" || -z "$key" ]]; then
-    printf 'claude-janus: setup cancelled (empty URL or key)\n' >&2
-    exit 2
-  fi
-  write_router_config "$base" "$key" "$ROUTER_CONFIG"
-  JANUS_BASE_URL="$(janus_normalize_base_url "$base")"
-  JANUS_API_KEY="$key"
-  printf 'Wrote %s\n' "$ROUTER_CONFIG" >&2
-}
-
-if [[ $BYPASS_ROUTER_CONFIG -eq 0 ]] && is_placeholder_config; then
-  run_first_run_setup
-fi
-JANUS_BASE_URL="$(janus_normalize_base_url "$JANUS_BASE_URL")"
 
 # ---- Curated Janus routes ---------------------------------------------------
 CLAUDE_OPUS="openrouter/anthropic/claude-opus-4.8"
@@ -156,65 +71,93 @@ PRESET_NOTES=(
   'Claude Code main turn verified'
 )
 PRESET_SHORTCUTS=('o' 's' 'h' 'p' 'f' 'g')
-CATALOG_JSON=""
+CATALOG_JSON="$JANUS_CATALOG_JSON"
 CATALOG_STATUS=0
 
 # ---- Saved tier mappings ----------------------------------------------------
-STATE_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/claude-janus"
-CONFIG_FILE="$STATE_DIR/mappings.conf"
-mkdir -p "$STATE_DIR"
-chmod 700 "$STATE_DIR" 2>/dev/null || true
+CONFIG_FILE="$JANUS_CLAUDE_MAPPINGS"
+mkdir -p "$JANUS_CONFIG_DIR"
+chmod 700 "$JANUS_CONFIG_DIR" 2>/dev/null || true
 
-# Safe initial configuration. Claude/OpenRouter routes remain selectable, but
-# Sonnet and Haiku default to routes verified end-to-end with Claude Code tools.
 OPUS_MODEL="$CLAUDE_OPUS"
 SONNET_MODEL="$DEEPSEEK_PRO"
 HAIKU_MODEL="$GLM_47"
-SUBAGENT_MODEL=""
+SUBAGENT_MODEL="$DEEPSEEK_PRO"
 DEFAULT_TIER="sonnet"
 
-valid_tier() {
+claude_valid_tier() {
   case "$1" in opus|sonnet|haiku) return 0 ;; *) return 1 ;; esac
 }
 
-valid_model_value() {
-  [[ -n "$1" && "$1" != *$'\n'* && "$1" != *'='* ]]
+claude_valid_model_value() {
+  [[ -n "$1" && "$1" != *$'\n'* && "$1" != *$'\r'* && "$1" != *'='* ]]
 }
 
-load_config() {
-  [[ -f "$CONFIG_FILE" ]] || return 0
-  local key value
-  while IFS='=' read -r key value || [[ -n "${key:-}" ]]; do
+claude_load_mappings() {
+  local file="$1" line key value line_number=0
+  local saw_opus=0 saw_sonnet=0 saw_haiku=0 saw_subagent=0 saw_default=0
+  [[ -f "$file" ]] || return 1
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    ((line_number += 1))
+    case "$line" in ''|'#'*) continue ;; esac
+    [[ "$line" != *$'\r'* ]] || { printf 'claude-janus: invalid mapping configuration at line %d\n' "$line_number" >&2; return 1; }
+    key="${line%%=*}"
+    [[ "$line" == *=* ]] || { printf 'claude-janus: invalid mapping configuration at line %d\n' "$line_number" >&2; return 1; }
+    value="${line#*=}"
     case "$key" in
-      OPUS_MODEL)     valid_model_value "$value" && OPUS_MODEL="$value" ;;
-      SONNET_MODEL)   valid_model_value "$value" && SONNET_MODEL="$value" ;;
-      HAIKU_MODEL)    valid_model_value "$value" && HAIKU_MODEL="$value" ;;
-      SUBAGENT_MODEL) valid_model_value "$value" && SUBAGENT_MODEL="$value" ;;
-      DEFAULT_TIER)   valid_tier "$value" && DEFAULT_TIER="$value" ;;
+      OPUS_MODEL) ((saw_opus == 0)) || return 1; saw_opus=1; claude_valid_model_value "$value" || return 1; OPUS_MODEL="$value" ;;
+      SONNET_MODEL) ((saw_sonnet == 0)) || return 1; saw_sonnet=1; claude_valid_model_value "$value" || return 1; SONNET_MODEL="$value" ;;
+      HAIKU_MODEL) ((saw_haiku == 0)) || return 1; saw_haiku=1; claude_valid_model_value "$value" || return 1; HAIKU_MODEL="$value" ;;
+      SUBAGENT_MODEL) ((saw_subagent == 0)) || return 1; saw_subagent=1; claude_valid_model_value "$value" || return 1; SUBAGENT_MODEL="$value" ;;
+      DEFAULT_TIER) ((saw_default == 0)) || return 1; saw_default=1; claude_valid_tier "$value" || return 1; DEFAULT_TIER="$value" ;;
+      *) printf 'claude-janus: unknown mapping key at line %d\n' "$line_number" >&2; return 1 ;;
     esac
-  done < "$CONFIG_FILE"
+  done < "$file"
+  if ((saw_opus + saw_sonnet + saw_haiku + saw_subagent + saw_default != 5)); then
+    printf 'claude-janus: mapping configuration must contain all five keys exactly once\n' >&2
+    return 1
+  fi
 }
 
-save_config() {
-  {
-    printf 'OPUS_MODEL=%s\n' "$OPUS_MODEL"
-    printf 'SONNET_MODEL=%s\n' "$SONNET_MODEL"
-    printf 'HAIKU_MODEL=%s\n' "$HAIKU_MODEL"
-    printf 'SUBAGENT_MODEL=%s\n' "$SUBAGENT_MODEL"
-    printf 'DEFAULT_TIER=%s\n' "$DEFAULT_TIER"
-  } > "$CONFIG_FILE"
-  chmod 600 "$CONFIG_FILE" 2>/dev/null || true
+claude_validate_mappings() {
+  local catalog="$1" model
+  for model in "$OPUS_MODEL" "$SONNET_MODEL" "$HAIKU_MODEL" "$SUBAGENT_MODEL"; do
+    if ! janus_catalog_contains "$catalog" "$model"; then
+      printf 'claude-janus: mapped model is not advertised by Janus: %s\n' "$model" >&2
+      return 1
+    fi
+  done
 }
 
-load_config
-[[ -n "$SUBAGENT_MODEL" ]] || SUBAGENT_MODEL="$SONNET_MODEL"
-[[ -f "$CONFIG_FILE" ]] || save_config
+claude_save_mappings() {
+  local file="$1" temporary directory
+  directory="$(dirname -- "$file")"
+  mkdir -p -- "$directory" && chmod 700 -- "$directory" || return 1
+  temporary="$(mktemp "$directory/.claude-mappings.conf.XXXXXX")" || return 1
+  if ! printf 'OPUS_MODEL=%s\nSONNET_MODEL=%s\nHAIKU_MODEL=%s\nSUBAGENT_MODEL=%s\nDEFAULT_TIER=%s\n' \
+    "$OPUS_MODEL" "$SONNET_MODEL" "$HAIKU_MODEL" "$SUBAGENT_MODEL" "$DEFAULT_TIER" > "$temporary" ||
+    ! chmod 600 "$temporary" || ! mv -fT -- "$temporary" "$file"; then
+    rm -f -- "$temporary"
+    return 1
+  fi
+}
+
+if [[ -e "$CONFIG_FILE" ]]; then
+  claude_load_mappings "$CONFIG_FILE" || { printf 'claude-janus: invalid Claude mappings: %s\n' "$CONFIG_FILE" >&2; exit 2; }
+else
+  claude_save_mappings "$CONFIG_FILE" || { printf 'claude-janus: cannot save Claude mappings: %s\n' "$CONFIG_FILE" >&2; exit 2; }
+fi
+claude_validate_mappings "$CATALOG_JSON" || exit 2
+
+valid_tier() { claude_valid_tier "$@"; }
+valid_model_value() { claude_valid_model_value "$@"; }
+save_config() { claude_save_mappings "$CONFIG_FILE"; }
 
 # ---- Terminal UI ------------------------------------------------------------
 # Full-screen menus are enabled only for an actual interactive terminal. Piped
-# input, dry-runs, --help, and CLAUDE_JANUS_TIER automation stay scroll-safe.
+# input, dry-runs, --help, and tier automation stay scroll-safe.
 MENU_USED=0
-if [[ -n "${CLAUDE_JANUS_DRYRUN:-}" ]]; then
+if [[ "${JANUS_LAUNCHER_DRY_RUN:-}" == 1 ]]; then
   JANUS_UI_DISABLE=1
 fi
 janus_ui_init 'CLAUDE CODE · OFFICIAL JANUS COMPANION'
@@ -271,7 +214,7 @@ tier_label() {
   mapping_label "$1"
 }
 
-model_for_tier() {
+claude_model_for_tier() {
   case "$1" in
     opus) printf '%s' "$OPUS_MODEL" ;;
     sonnet) printf '%s' "$SONNET_MODEL" ;;
@@ -604,29 +547,47 @@ render_startup_menu() {
 # ---- Determine startup tier -------------------------------------------------
 START_TIER="$DEFAULT_TIER"
 HAS_MODEL_ARG=0
-PASSTHROUGH_ONLY=0
-expect_model_value=0
-for arg in "$@"; do
-  if [[ $expect_model_value -eq 1 ]]; then
-    HAS_MODEL_ARG=1
-    expect_model_value=0
-    continue
-  fi
-  case "$arg" in
-    --model) expect_model_value=1 ;;
-    --model=*) HAS_MODEL_ARG=1 ;;
-    -h|--help|-v|--version) PASSTHROUGH_ONLY=1 ;;
-  esac
-done
-[[ $expect_model_value -eq 0 ]] || { printf 'claude-janus: --model requires a value\n' >&2; exit 2; }
+CLAUDE_CALLER_MODEL=""
+CLAUDE_USER_ARGS=()
 
-if [[ -n "${CLAUDE_JANUS_TIER:-}" ]]; then
-  if ! valid_tier "$CLAUDE_JANUS_TIER"; then
-    printf 'claude-janus: CLAUDE_JANUS_TIER must be opus, sonnet, or haiku\n' >&2
+claude_parse_arguments() {
+  local expect_model_value=0 arg
+  HAS_MODEL_ARG=0
+  CLAUDE_CALLER_MODEL=""
+  CLAUDE_USER_ARGS=("$@")
+  for arg in "$@"; do
+    if [[ $expect_model_value -eq 1 ]]; then
+      [[ -n "$arg" ]] || { printf 'claude-janus: --model requires a value\n' >&2; return 2; }
+      HAS_MODEL_ARG=1
+      CLAUDE_CALLER_MODEL="$arg"
+      expect_model_value=0
+      continue
+    fi
+    case "$arg" in
+      --model) expect_model_value=1 ;;
+      --model=*)
+        CLAUDE_CALLER_MODEL="${arg#--model=}"
+        [[ -n "$CLAUDE_CALLER_MODEL" ]] || { printf 'claude-janus: --model requires a value\n' >&2; return 2; }
+        HAS_MODEL_ARG=1
+        ;;
+    esac
+  done
+  [[ $expect_model_value -eq 0 ]] || { printf 'claude-janus: --model requires a value\n' >&2; return 2; }
+}
+
+claude_parse_arguments "$@" || exit $?
+if [[ $HAS_MODEL_ARG -eq 1 ]] && ! janus_catalog_contains "$CATALOG_JSON" "$CLAUDE_CALLER_MODEL"; then
+  printf 'claude-janus: caller model is not advertised by Janus: %s\n' "$CLAUDE_CALLER_MODEL" >&2
+  exit 2
+fi
+
+if [[ -n "${JANUS_LAUNCHER_CLAUDE_TIER:-}" ]]; then
+  if ! claude_valid_tier "$JANUS_LAUNCHER_CLAUDE_TIER"; then
+    printf 'claude-janus: JANUS_LAUNCHER_CLAUDE_TIER must be opus, sonnet, or haiku\n' >&2
     exit 2
   fi
-  START_TIER="$CLAUDE_JANUS_TIER"
-elif [[ $HAS_MODEL_ARG -eq 0 && $PASSTHROUGH_ONLY -eq 0 ]]; then
+  START_TIER="$JANUS_LAUNCHER_CLAUDE_TIER"
+elif [[ $HAS_MODEL_ARG -eq 0 ]]; then
   MENU_USED=1
   startup_cursor=1
   case "$DEFAULT_TIER" in opus) startup_cursor=1;; sonnet) startup_cursor=2;; haiku) startup_cursor=3;; esac
@@ -680,46 +641,24 @@ export ANTHROPIC_DEFAULT_SONNET_MODEL="$SONNET_MODEL"
 export ANTHROPIC_DEFAULT_HAIKU_MODEL="$HAIKU_MODEL"
 export CLAUDE_CODE_SUBAGENT_MODEL="$SUBAGENT_MODEL"
 
-CLAUDE_BIN="$(janus_resolve_client_executable claude "${BASH_SOURCE[0]}" || true)"
-[[ -x "$CLAUDE_BIN" ]] || { printf 'claude-janus: Claude Code binary not found\n' >&2; exit 127; }
-
 command=("$CLAUDE_BIN")
-if [[ $HAS_MODEL_ARG -eq 0 && $PASSTHROUGH_ONLY -eq 0 ]]; then
+if [[ $HAS_MODEL_ARG -eq 0 ]]; then
   command+=(--model "$START_TIER")
 fi
 command+=("$@")
 
-SELECTED_MODEL="$(model_for_tier "$START_TIER")"
+SELECTED_MODEL="$(claude_model_for_tier "$START_TIER")"
 
 # Remove wrapper screens before Claude Code draws its own TUI. Automation and
 # dry-run invocations never clear the caller's terminal.
 if [[ $MENU_USED -eq 1 && $UI_ENABLED -eq 1 ]]; then
   clear_screen
 fi
-if [[ $BYPASS_ROUTER_CONFIG -eq 0 ]]; then
-  printf '%s→ Janus%s  %s%s tier%s → %s\n' \
-    "$CYAN" "$RESET" "$BOLD" "$(tier_label "$START_TIER")" "$RESET" \
-    "$(model_label "$SELECTED_MODEL")" >&2
-fi
+printf '%s→ Janus%s  %s%s tier%s → %s\n' \
+  "$CYAN" "$RESET" "$BOLD" "$(tier_label "$START_TIER")" "$RESET" \
+  "$(model_label "$SELECTED_MODEL")" >&2
 
-if [[ $BYPASS_ROUTER_CONFIG -eq 0 && -z "${CLAUDE_JANUS_SKIP_CHECK:-}" ]] && command -v curl >/dev/null 2>&1; then
-  rc=0
-  janus_check_health "$JANUS_BASE_URL" "$JANUS_API_KEY" || rc=$?
-  if [[ $rc -ne 0 ]]; then
-    case "$rc" in
-      1) msg="Janus /v1/health unreachable at $JANUS_BASE_URL" ;;
-      2) msg="Authenticated /v1/models failed (check JANUS_API_KEY / allowlist)" ;;
-      *) msg="Could not reach Janus at $JANUS_BASE_URL" ;;
-    esac
-    if [[ -n "${CLAUDE_JANUS_STRICT_CHECK:-}" ]]; then
-      printf '%s× %s%s\n' "$RED" "$msg" "$RESET" >&2
-      exit 2
-    fi
-    printf '%s! %s — launching anyway.%s\n' "$YELLOW" "$msg" "$RESET" >&2
-  fi
-fi
-
-if [[ -n "${CLAUDE_JANUS_DRYRUN:-}" ]]; then
+if [[ "${JANUS_LAUNCHER_DRY_RUN:-}" == 1 ]]; then
   printf '[dry-run] would exec:'
   printf ' %q' "${command[@]}"
   printf '\n'
