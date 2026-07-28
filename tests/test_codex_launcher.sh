@@ -34,7 +34,8 @@ for arg in "$@"; do
   case "$arg" in
     */v1/health) exit 0 ;;
     */v1/models)
-      printf '%s\n' '{"data":[{"id":"model-a"}]}'
+      jq -cn --arg extra "${JANUS_TEST_EXTRA_MODEL:-}" \
+        '{data: ([{id:"model-a"}] + if $extra == "" then [] else [{id:$extra}] end)}'
       exit 0
       ;;
   esac
@@ -137,7 +138,7 @@ MARKER="$TMP/evaluated"
 SPECIAL_URL="https://janus.test/path space/quote\"/back\\slash/\$(touch $MARKER)/\`touch $MARKER\`;semi"
 SPECIAL_MODEL='model space \" \\ $dollar `backtick`; semicolon'
 SPECIAL_CONFIG='features.note="space \\ \" $ ` ; $(touch '"$MARKER"')"'
-out="$(run_with_url "$SPECIAL_URL" --model "$SPECIAL_MODEL" -c "$SPECIAL_CONFIG")"
+out="$(JANUS_TEST_EXTRA_MODEL="$SPECIAL_MODEL" run_with_url "$SPECIAL_URL" --model "$SPECIAL_MODEL" -c "$SPECIAL_CONFIG")"
 expected_root="${SPECIAL_URL%/}/v1"
 expected_toml="$(env CODEX_JANUS_SOURCE_ONLY=1 bash -c 'source "$1"; toml_quote_string "$2"' _ "$WRAPPER" "$expected_root")"
 assert_contains "$out" "ARG[5]=$(quote_arg "model_providers.janus.base_url=$expected_toml")" 'special URL is one escaped TOML argument'
@@ -156,4 +157,64 @@ locale_after="$(env -u LC_ALL CODEX_JANUS_SOURCE_ONLY=1 bash -c 'source "$1"; to
 [[ "$locale_after" == unset ]] || fail 'TOML quoting must not change caller locale'
 pass 'TOML control-character escaping'
 
-printf 'All Codex launcher Task 5 tests passed.\n'
+# Task 6 model state is a strict, single-line format. Values are split only at
+# the first '=' so ordinary catalog identifiers round-trip byte-for-byte.
+source_codex() {
+  env CODEX_JANUS_SOURCE_ONLY=1 bash -c 'source "$1"; shift; "$@"' _ "$WRAPPER" "$@"
+}
+state="$TMP/config/state.conf"
+roundtrip='provider/name.with:dash_under score=high=exact'
+source_codex codex_save_model "$state" "$roundtrip"
+[[ "$(stat -c '%a' "$state")" == 600 ]] || fail 'Codex state mode must be 600'
+[[ "$(<"$state")" == "MODEL=$roundtrip" ]] || fail 'Codex state must contain exactly one MODEL line'
+loaded="$(env CODEX_JANUS_SOURCE_ONLY=1 bash -c 'source "$1"; codex_load_model "$2"; printf "%s" "$CODEX_SAVED_MODEL"' _ "$WRAPPER" "$state")"
+[[ "$loaded" == "$roundtrip" ]] || fail "first-equals state round-trip: $(quote_arg "$loaded")"
+pass 'strict state round-trip and permissions'
+
+for contents in '' 'OTHER=model-a' $'MODEL=model-a\nMODEL=model-b' $'MODEL=model-a\nTRAILING=x'; do
+  printf '%s' "$contents" > "$state"
+  if source_codex codex_load_model "$state" >/dev/null 2>&1; then
+    fail "malformed state accepted: $(quote_arg "$contents")"
+  fi
+done
+rm -f "$state"
+source_codex codex_load_model "$state" >/dev/null 2>&1 && fail 'missing state accepted'
+for invalid in $'provider/model\nother' $'provider/model\rother'; do
+  source_codex codex_validate_model '{"data":[{"id":"provider/model"}]}' "$invalid" >/dev/null 2>&1 &&
+    fail 'newline or carriage-return model accepted'
+  source_codex codex_save_model "$state" "$invalid" >/dev/null 2>&1 &&
+    fail 'newline or carriage-return model persisted'
+done
+pass 'missing malformed duplicate and control-byte state rejected'
+
+ordinary_catalog='{"data":[{"id":"provider/name.with:dash_under score=high=exact"}]}'
+source_codex codex_validate_model "$ordinary_catalog" "$roundtrip" || fail 'ordinary exact catalog ID rejected'
+source_codex codex_validate_model "$ordinary_catalog" 'provider/missing' >/dev/null 2>&1 && fail 'stale model accepted'
+source_codex janus_catalog_validate_json '{"data":[{"id":"bad\u0000model"}]}' >/dev/null 2>&1 &&
+  fail 'escaped NUL catalog model accepted at JSON boundary'
+pass 'catalog validation and escaped NUL rejection'
+
+# A valid caller model wins over malformed/stale persisted state and does not
+# rewrite it. It is still required to exist in the fetched catalog.
+printf 'MODEL=stale/model\nMODEL=duplicate/model\n' > "$TMP/config/codex.conf"
+before="$(sha256sum "$TMP/config/codex.conf")"
+out="$(run_with_url 'https://janus.test' --model model-a exec prompt)"
+after="$(sha256sum "$TMP/config/codex.conf")"
+[[ "$before" == "$after" ]] || fail 'caller model rewrote stale persisted state'
+assert_contains "$out" 'ARG[10]=--model' 'caller model retained'
+expect_failure 'unknown caller model' 'is not available in the Janus catalog' --model missing/model
+pass 'caller precedence without state rewrite and catalog validation'
+
+# Missing, malformed, and stale state fail promptly with stdin unavailable.
+for contents in missing 'OTHER=model-a' 'MODEL=stale/model'; do
+  if [[ "$contents" == missing ]]; then rm -f "$TMP/config/codex.conf"; else printf '%s\n' "$contents" > "$TMP/config/codex.conf"; fi
+  set +e
+  output="$(timeout 3 env "${BASE_ENV[@]}" JANUS_LAUNCHER_BASE_URL=https://janus.test "$WRAPPER" </dev/null 2>&1)"
+  rc=$?
+  set -e
+  [[ $rc -ne 0 && $rc -ne 124 ]] || fail "noninteractive $contents state must fail without waiting for stdin"
+  assert_contains "$output" 'codex-janus --model MODEL' "noninteractive $contents corrective command"
+done
+pass 'noninteractive missing and stale state fail without stdin'
+
+printf 'All Codex launcher Task 6 shell tests passed.\n'

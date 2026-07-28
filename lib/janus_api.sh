@@ -19,7 +19,7 @@ janus_catalog_validate_json() {
     printf 'Janus Launcher requires jq.\n' >&2
     return 127
   }
-  jq -e 'type == "object" and (.data | type == "array") and all(.data[]; (.id | type == "string") and (.id | length > 0))' \
+  jq -e 'type == "object" and (.data | type == "array") and all(.data[]; (.id | type == "string") and (.id | length > 0) and (.id | index("\u0000") == null))' \
     >/dev/null 2>&1 <<<"$1"
 }
 

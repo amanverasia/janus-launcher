@@ -18,6 +18,71 @@ source "$JANUS_LIB_DIR/janus_api.sh"
 source "$JANUS_LIB_DIR/janus_config.sh"
 # shellcheck source=lib/janus_runtime.sh
 source "$JANUS_LIB_DIR/janus_runtime.sh"
+# shellcheck source=lib/janus_ui.sh
+source "$JANUS_LIB_DIR/janus_ui.sh"
+
+codex_valid_model_value() {
+  [[ -n "$1" && "$1" != *$'\n'* && "$1" != *$'\r'* ]]
+}
+
+codex_load_model() {
+  local file="$1" line value
+  CODEX_SAVED_MODEL=''
+  [[ -f "$file" ]] || return 1
+  IFS= read -r line < "$file" || [[ -n "$line" ]] || return 1
+  [[ "$line" == MODEL=* ]] || return 1
+  value="${line#MODEL=}"
+  codex_valid_model_value "$value" || return 1
+  [[ "$(wc -l < "$file")" -eq 1 && "$(tail -c 1 "$file" 2>/dev/null || true)" == '' ]] || return 1
+  CODEX_SAVED_MODEL="$value"
+}
+
+codex_save_model() {
+  local file="$1" model="$2" directory temporary
+  codex_valid_model_value "$model" || return 1
+  directory="$(dirname -- "$file")"
+  mkdir -p -- "$directory" && chmod 700 -- "$directory" || return 1
+  [[ ! -d "$file" ]] || return 1
+  temporary="$(mktemp "$directory/.codex.conf.XXXXXX")" || return 1
+  if ! chmod 600 -- "$temporary" || ! printf 'MODEL=%s\n' "$model" > "$temporary" ||
+    ! mv -fT -- "$temporary" "$file" || [[ ! -f "$file" ]]; then
+    rm -f -- "$temporary"
+    return 1
+  fi
+}
+
+codex_validate_model() {
+  local catalog="$1" model="$2"
+  codex_valid_model_value "$model" && janus_catalog_contains "$catalog" "$model"
+}
+
+codex_render_model_picker() {
+  local cursor="$1"
+  shift
+  local -a models=("$@")
+  local i number
+  janus_ui_header 'Select a Codex model' 'Choose one exact model from the current Janus catalog.'
+  for i in "${!models[@]}"; do
+    number=$((i + 1))
+    janus_ui_choice "$cursor" "$number" "$number" "${models[i]}"
+  done
+  printf '\n  %s↑/↓ move · Enter select · Esc/Q cancel%s\n' "$DIM" "$RESET" >&2
+}
+
+codex_select_model() {
+  local catalog="$1"
+  local -a models=()
+  local selected
+  jq -e 'all(.data[]; (.id | index("\n") == null) and (.id | index("\r") == null))' \
+    >/dev/null 2>&1 <<<"$catalog" || return 1
+  mapfile -t models < <(janus_extract_model_ids "$catalog") || return
+  ((${#models[@]} > 0)) || return 1
+  janus_ui_is_interactive || return 1
+  janus_ui_navigate "${#models[@]}" 1 codex_render_model_picker '' "${models[@]}"
+  selected="$JANUS_UI_RESULT"
+  [[ "$selected" != back ]] || return 1
+  CODEX_SELECTED_MODEL="${models[selected - 1]}"
+}
 
 # Print VALUE as a TOML basic string. Bash cannot contain NUL; every other C0
 # control byte and DEL is escaped so generated configuration is always valid.
@@ -158,7 +223,28 @@ if ((CODEX_PASSTHROUGH_ONLY)); then
   exec "$CODEX_BIN" "$@"
 fi
 janus_load_validated_service || exit $?
+janus_ui_init 'JANUS LAUNCHER · CODEX'
+if ((CODEX_HAS_CALLER_MODEL)); then
+  if ! codex_validate_model "$JANUS_CATALOG_JSON" "$CODEX_CALLER_MODEL"; then
+    printf 'codex-janus: requested model is not available in the Janus catalog: %s\n' "$CODEX_CALLER_MODEL" >&2
+    exit 2
+  fi
+  CODEX_EFFECTIVE_MODEL="$CODEX_CALLER_MODEL"
+elif codex_load_model "$JANUS_CODEX_CONFIG" &&
+  codex_validate_model "$JANUS_CATALOG_JSON" "$CODEX_SAVED_MODEL"; then
+  CODEX_EFFECTIVE_MODEL="$CODEX_SAVED_MODEL"
+elif janus_ui_is_interactive && codex_select_model "$JANUS_CATALOG_JSON"; then
+  CODEX_EFFECTIVE_MODEL="$CODEX_SELECTED_MODEL"
+  codex_save_model "$JANUS_CODEX_CONFIG" "$CODEX_EFFECTIVE_MODEL" || {
+    printf 'codex-janus: cannot save Codex model selection: %s\n' "$JANUS_CODEX_CONFIG" >&2
+    exit 2
+  }
+else
+  printf 'codex-janus: no valid saved Codex model is available.\n' >&2
+  printf 'Run codex-janus --model MODEL once with a model from the Janus catalog, or run codex-janus interactively to choose one.\n' >&2
+  exit 2
+fi
 codex_build_provider_arguments "$(janus_api_root "$JANUS_BASE_URL")"
-codex_build_command "$CODEX_BIN" "$CODEX_CALLER_MODEL" "${CODEX_USER_ARGS[@]}" || exit $?
+codex_build_command "$CODEX_BIN" "$CODEX_EFFECTIVE_MODEL" "${CODEX_USER_ARGS[@]}" || exit $?
 export JANUS_LAUNCHER_CODEX_API_KEY="$JANUS_API_KEY"
 exec "${CODEX_COMMAND[@]}"
