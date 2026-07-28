@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# Thin client dispatcher for Janus Launcher.
+set -euo pipefail
+
+usage() {
+  printf 'Usage: janus-launcher {claude|codex} [arguments...]\n' >&2
+}
+
+resolve_launcher() {
+  local name="$1" sibling
+  sibling="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/$name"
+  if [[ -x "$sibling" ]]; then
+    printf '%s\n' "$sibling"
+    return 0
+  fi
+  command -v "$name" 2>/dev/null || return 1
+}
+
+delegate() {
+  local client="$1" command_name launcher
+  local -a command
+  shift
+  case "$client" in
+    claude) command_name='claude-janus' ;;
+    codex) command_name='codex-janus' ;;
+    *)
+      printf 'Unknown client: %s\n' "$client" >&2
+      usage
+      return 2
+      ;;
+  esac
+  launcher="$(resolve_launcher "$command_name" || true)"
+  if [[ -z "$launcher" ]]; then
+    printf 'janus-launcher: %s not found\n' "$command_name" >&2
+    return 127
+  fi
+  command=("$launcher" "$@")
+  exec "${command[@]}"
+}
+
+if (($#)); then
+  client="$1"
+  shift
+  delegate "$client" "$@"
+fi
+
+if [[ ! -t 0 || ! -t 2 ]]; then
+  usage
+  exit 2
+fi
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+if [[ -f "$ROOT_DIR/lib/janus_ui.sh" ]]; then
+  JANUS_UI_LIB="$ROOT_DIR/lib/janus_ui.sh"
+elif [[ -f "$SCRIPT_DIR/../lib/janus_ui.sh" ]]; then
+  JANUS_UI_LIB="$SCRIPT_DIR/../lib/janus_ui.sh"
+else
+  JANUS_UI_LIB="${XDG_DATA_HOME:-$HOME/.local/share}/janus-launcher/lib/janus_ui.sh"
+fi
+if [[ ! -f "$JANUS_UI_LIB" ]]; then
+  printf 'janus-launcher: shared UI library not found: %s\n' "$JANUS_UI_LIB" >&2
+  exit 127
+fi
+# shellcheck source=lib/janus_ui.sh
+source "$JANUS_UI_LIB"
+
+render_clients() {
+  local cursor="$1"
+  janus_ui_header 'Choose a client' 'Select the CLI to launch through Janus.'
+  janus_ui_choice "$cursor" 1 c 'Claude Code'
+  janus_ui_choice "$cursor" 2 x 'Codex'
+  printf '\n  %s↑/↓ move · Enter select · Esc/Q cancel%s\n' "$DIM" "$RESET" >&2
+}
+
+janus_ui_init 'JANUS LAUNCHER'
+janus_ui_navigate 2 1 render_clients 'cx'
+case "$JANUS_UI_RESULT" in
+  1) delegate claude ;;
+  2) delegate codex ;;
+  back)
+    usage
+    exit 130
+    ;;
+esac
