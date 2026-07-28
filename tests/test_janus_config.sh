@@ -133,6 +133,31 @@ if find "$TMP/write/private" -maxdepth 1 -type f ! -name router.conf | grep -q .
 fi
 pass "secure atomic router persistence"
 
+printf 'stale router contents\n' > "$TMP/write/private/router.conf"
+chmod 644 "$TMP/write/private/router.conf"
+janus_config_write_router "$TMP/write/private/router.conf" \
+  'https://replacement.janus.test/v1/' 'replacement-secret'
+assert_eq "$(stat -c %a "$TMP/write/private/router.conf")" '600' \
+  "replacement router file mode"
+assert_eq "$(<"$TMP/write/private/router.conf")" \
+  $'JANUS_BASE_URL=https://replacement.janus.test\nJANUS_API_KEY=replacement-secret' \
+  "existing router replacement"
+pass "existing router replaced securely"
+
+mkdir -p "$TMP/directory-target/router.conf"
+if janus_config_write_router "$TMP/directory-target/router.conf" \
+  'https://rejected.janus.test' 'rejected-secret' \
+  >"$TMP/directory-target.out" 2>"$TMP/directory-target.err"; then
+  fail "router directory destination accepted"
+fi
+[[ -d "$TMP/directory-target/router.conf" ]] \
+  || fail "router directory destination changed"
+if find "$TMP/directory-target" -mindepth 1 \
+  \( -type f -o -type l \) | grep -q .; then
+  fail "directory destination left temporary files inside or beside target"
+fi
+pass "router directory destination rejected cleanly"
+
 JANUS_LAUNCHER_CONFIG_DIR="$TMP/setup" janus_config_init_paths
 JANUS_LAUNCHER_SETUP_BASE_URL='https://setup.janus.test/v1/' \
 JANUS_LAUNCHER_SETUP_API_KEY='setup-secret' \
@@ -143,5 +168,24 @@ assert_eq "$(<"$JANUS_ROUTER_CONFIG")" \
   $'JANUS_BASE_URL=https://setup.janus.test\nJANUS_API_KEY=setup-secret' \
   "first setup persistence"
 pass "noninteractive first setup"
+
+mkdir -p "$TMP/setup-failure/router.conf"
+JANUS_ROUTER_CONFIG="$TMP/setup-failure/router.conf"
+unset JANUS_BASE_URL JANUS_API_KEY
+if JANUS_LAUNCHER_SETUP_BASE_URL='https://failed-setup.janus.test/v1/' \
+  JANUS_LAUNCHER_SETUP_API_KEY='failed-setup-secret' \
+  janus_config_run_first_setup \
+  >"$TMP/setup-failure.out" 2>"$TMP/setup-failure.err"; then
+  fail "first setup succeeded when persistence failed"
+fi
+[[ ! ${JANUS_BASE_URL+x} ]] \
+  || fail "first setup set JANUS_BASE_URL after persistence failure"
+[[ ! ${JANUS_API_KEY+x} ]] \
+  || fail "first setup set JANUS_API_KEY after persistence failure"
+if find "$TMP/setup-failure" -mindepth 1 \
+  \( -type f -o -type l \) | grep -q .; then
+  fail "failed first setup left temporary files"
+fi
+pass "first setup leaves credentials unset on persistence failure"
 
 printf 'All janus_config unit tests passed.\n'
