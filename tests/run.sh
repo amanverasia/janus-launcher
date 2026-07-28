@@ -2,6 +2,7 @@
 set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 "$ROOT/tests/test_janus_api.sh"
+"$ROOT/tests/test_janus_config.sh"
 "$ROOT/tests/smoke.sh"
 "$ROOT/tests/arrow_keys.py"
 python3 "$ROOT/tests/subagent_mapping.py"
