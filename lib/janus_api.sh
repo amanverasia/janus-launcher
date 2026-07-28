@@ -44,7 +44,7 @@ janus_fetch_catalog() {
     -A 'janus-launcher/1.0' \
     -H "Authorization: Bearer $key" \
     -H 'Accept: application/json' \
-    "$(janus_api_root "$base")/models"
+    -- "$(janus_api_root "$base")/models"
 }
 
 janus_validate_service() {
@@ -60,7 +60,7 @@ janus_validate_service() {
 
   curl -fsS -o /dev/null --max-time 3 \
     -A 'janus-launcher/1.0' \
-    "$(janus_api_root "$base")/health" || return 1
+    -- "$(janus_api_root "$base")/health" || return 1
 
   body="$(janus_fetch_catalog "$base" "$key")" || {
     rc=$?

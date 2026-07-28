@@ -12,7 +12,14 @@ from pathlib import Path
 root = Path(__file__).resolve().parents[1]
 tmp = Path(tempfile.mkdtemp(prefix="claude-janus-subagent-test-"))
 (tmp / "bin").mkdir()
-(tmp / "config").mkdir()
+(tmp / "config" / "janus-launcher").mkdir(parents=True)
+(tmp / "config" / "janus-launcher" / "claude-mappings.conf").write_text(
+    "OPUS_MODEL=openrouter/anthropic/claude-opus-4.8\n"
+    "SONNET_MODEL=deepseek/deepseek-v4-pro\n"
+    "HAIKU_MODEL=zhipu/glm-4.7\n"
+    "SUBAGENT_MODEL=deepseek/deepseek-v4-pro\n"
+    "DEFAULT_TIER=sonnet\n"
+)
 
 fake_claude = tmp / "bin" / "claude"
 fake_claude.write_text(

@@ -38,20 +38,13 @@ if janus_is_top_level_passthrough "$@"; then
   exec "$CLAUDE_BIN" "$@"
 fi
 
+if [[ "${JANUS_LAUNCHER_DRY_RUN:-}" == 1 ]]; then
+  JANUS_UI_DISABLE=1
+fi
+janus_ui_init 'CLAUDE CODE · OFFICIAL JANUS COMPANION'
 janus_load_validated_service || exit $?
 
-read_reply() {
-  local answer=""
-  if [[ -t 0 ]]; then
-    IFS= read -er answer || answer=""
-  elif { exec 3</dev/tty; } 2>/dev/null; then
-    IFS= read -er answer <&3 || answer=""
-    exec 3<&- 2>/dev/null || true
-  else
-    IFS= read -r answer || answer=""
-  fi
-  printf '%s' "$answer"
-}
+read_reply() { janus_ui_read_reply; }
 
 # ---- Curated Janus routes ---------------------------------------------------
 CLAUDE_OPUS="openrouter/anthropic/claude-opus-4.8"
@@ -142,25 +135,27 @@ claude_save_mappings() {
   fi
 }
 
+CLAUDE_MAPPINGS_MISSING=0
 if [[ -e "$CONFIG_FILE" ]]; then
   claude_load_mappings "$CONFIG_FILE" || { printf 'claude-janus: invalid Claude mappings: %s\n' "$CONFIG_FILE" >&2; exit 2; }
 else
-  claude_save_mappings "$CONFIG_FILE" || { printf 'claude-janus: cannot save Claude mappings: %s\n' "$CONFIG_FILE" >&2; exit 2; }
+  CLAUDE_MAPPINGS_MISSING=1
 fi
-claude_validate_mappings "$CATALOG_JSON" || exit 2
+if ((CLAUDE_MAPPINGS_MISSING == 0)); then
+  claude_validate_mappings "$CATALOG_JSON" || exit 2
+fi
 
 valid_tier() { claude_valid_tier "$@"; }
 valid_model_value() { claude_valid_model_value "$@"; }
-save_config() { claude_save_mappings "$CONFIG_FILE"; }
+CLAUDE_INITIAL_CONFIGURING=0
+save_config() {
+  ((CLAUDE_INITIAL_CONFIGURING)) || claude_save_mappings "$CONFIG_FILE"
+}
 
 # ---- Terminal UI ------------------------------------------------------------
 # Full-screen menus are enabled only for an actual interactive terminal. Piped
 # input, dry-runs, --help, and tier automation stay scroll-safe.
 MENU_USED=0
-if [[ "${JANUS_LAUNCHER_DRY_RUN:-}" == 1 ]]; then
-  JANUS_UI_DISABLE=1
-fi
-janus_ui_init 'CLAUDE CODE · OFFICIAL JANUS COMPANION'
 UI_ENABLED="$JANUS_UI_ENABLED"
 
 # Compatibility names keep the existing Claude-specific call sites unchanged
@@ -532,6 +527,36 @@ configure_menu() {
   done
 }
 
+claude_configure_initial_mappings() {
+  local role first_model
+  janus_ui_is_interactive || {
+    printf 'claude-janus: Claude mappings are missing: %s\n' "$CONFIG_FILE" >&2
+    printf 'Run claude-janus interactively to configure Opus, Sonnet, Haiku, and subagent mappings.\n' >&2
+    return 2
+  }
+  first_model="$(janus_extract_model_ids "$CATALOG_JSON" | while IFS= read -r model; do printf '%s' "$model"; break; done)"
+  [[ -n "$first_model" ]] || return 2
+  OPUS_MODEL="$first_model"
+  SONNET_MODEL="$first_model"
+  HAIKU_MODEL="$first_model"
+  SUBAGENT_MODEL="$first_model"
+  screen_header 'Initial Claude mapping setup' 'Choose a catalog model for each Claude role; nothing is saved until all four are valid.'
+  CLAUDE_INITIAL_CONFIGURING=1
+  for role in opus sonnet haiku subagent; do
+    configure_mapping "$role"
+  done
+  CLAUDE_INITIAL_CONFIGURING=0
+  claude_validate_mappings "$CATALOG_JSON" || return 2
+  claude_save_mappings "$CONFIG_FILE" || {
+    printf 'claude-janus: cannot save Claude mappings: %s\n' "$CONFIG_FILE" >&2
+    return 2
+  }
+}
+
+if ((CLAUDE_MAPPINGS_MISSING)); then
+  claude_configure_initial_mappings || exit $?
+fi
+
 render_startup_menu() {
   local cursor="$1"
   screen_header "Choose a Claude Code tier" "Select a mapping for this session, or press Enter for the highlighted tier"
@@ -551,11 +576,16 @@ CLAUDE_CALLER_MODEL=""
 CLAUDE_USER_ARGS=()
 
 claude_parse_arguments() {
-  local expect_model_value=0 arg
+  local expect_model_value=0 parsing_options=1 arg
   HAS_MODEL_ARG=0
   CLAUDE_CALLER_MODEL=""
   CLAUDE_USER_ARGS=("$@")
   for arg in "$@"; do
+    if ((parsing_options)) && [[ "$arg" == -- ]]; then
+      parsing_options=0
+      continue
+    fi
+    ((parsing_options)) || continue
     if [[ $expect_model_value -eq 1 ]]; then
       [[ -n "$arg" ]] || { printf 'claude-janus: --model requires a value\n' >&2; return 2; }
       HAS_MODEL_ARG=1

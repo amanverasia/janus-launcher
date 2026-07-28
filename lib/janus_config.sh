@@ -114,8 +114,24 @@ janus_config_run_first_setup() {
     fi
     printf 'Janus base URL (no /v1 required): ' >&2
     IFS= read -r base_url || base_url=""
-    printf 'Janus API key: ' >&2
-    IFS= read -r api_key || api_key=""
+    if declare -F janus_ui_read_secret >/dev/null; then
+      if janus_ui_read_secret 'Janus API key: '; then
+        api_key="$JANUS_UI_SECRET"
+      else
+        api_key=""
+      fi
+    else
+      local original_tty
+      printf 'Janus API key: ' >&2
+      original_tty="$(stty -g 2>/dev/null || true)"
+      [[ -n "$original_tty" ]] || return 2
+      trap 'stty "$original_tty" 2>/dev/null || true' RETURN INT TERM HUP
+      stty -echo 2>/dev/null || return 2
+      IFS= read -r api_key || api_key=""
+      stty "$original_tty" 2>/dev/null || true
+      trap - RETURN INT TERM HUP
+      printf '\n' >&2
+    fi
     if [[ -z "$base_url" || -z "$api_key" ]]; then
       printf 'Janus Launcher: setup cancelled (empty URL or key).\n' >&2
       return 2

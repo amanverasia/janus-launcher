@@ -46,7 +46,7 @@ janus_is_top_level_passthrough() {
 }
 
 janus_load_validated_service() {
-  local validation_output
+  local validation_output validation_status
 
   janus_config_init_paths || return
   janus_config_load_router "$JANUS_ROUTER_CONFIG" || return
@@ -54,6 +54,17 @@ janus_load_validated_service() {
     janus_config_run_first_setup || return
   fi
   JANUS_BASE_URL="$(janus_normalize_base_url "$JANUS_BASE_URL")"
-  validation_output="$(janus_validate_service "$JANUS_BASE_URL" "$JANUS_API_KEY")" || return
-  JANUS_CATALOG_JSON="$validation_output"
+  if validation_output="$(janus_validate_service "$JANUS_BASE_URL" "$JANUS_API_KEY")"; then
+    JANUS_CATALOG_JSON="$validation_output"
+    return 0
+  else
+    validation_status=$?
+  fi
+  case "$validation_status" in
+    1) printf 'Janus Launcher: Janus health check failed.\n' >&2 ;;
+    2) printf 'Janus Launcher: Janus model catalog request failed.\n' >&2 ;;
+    3) printf 'Janus Launcher: Janus model catalog response was malformed.\n' >&2 ;;
+    4) printf 'Janus Launcher: Janus model catalog is empty.\n' >&2 ;;
+  esac
+  return "$validation_status"
 }

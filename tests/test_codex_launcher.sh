@@ -129,6 +129,22 @@ expect_failure 'empty assigned model' '--model requires a value' --model=
 expect_failure 'missing -m value' '-m requires a value' -m
 pass 'owned-key rejection and missing values'
 
+for override in \
+  ' model_provider = "other"' \
+  '"model_provider"="other"' \
+  '"model_prov\u0069der"="other"' \
+  '"model_prov\U00000069der"="other"' \
+  "'model_provider' = \"other\"" \
+  'model_providers . janus . base_url = "other"' \
+  '"model_providers" . janus . "base_url" = "other"' \
+  "model_providers . 'janus' . base_url = \"other\"" \
+  'model_providers.janus.extra.descendant = "other"'
+do
+  expect_failure "semantic owned override $override" \
+    'cannot override launcher-owned Codex provider configuration' -c "$override"
+done
+pass 'semantic TOML owned-key rejection'
+
 # Owned-looking text outside config option values is ordinary caller input.
 args=(exec 'model_provider="prompt"' 'model_providers.janus.base_url="prompt"'
   --config 'features.example=true' --config=history.persistence=save-all
@@ -146,6 +162,21 @@ parsed="$(env CODEX_JANUS_SOURCE_ONLY=1 bash -c '
 ' _ "$WRAPPER")"
 [[ "$parsed" == 'MODEL=model-a HAS=1 COUNT=6 CFG=-mconfig ATTACHED=-c=-mattached' ]] || fail "config values must not be parsed as models: $parsed"
 pass 'model parser skips configuration values'
+
+parsed="$(env CODEX_JANUS_SOURCE_ONLY=1 bash -c '
+  source "$1"
+  codex_parse_arguments exec -- --model owned-looking -c model_provider=other --config model_providers.janus.base_url=other -m attached
+  printf "MODEL=%s HAS=%s COUNT=%d LAST=%s\n" "$CODEX_CALLER_MODEL" "$CODEX_HAS_CALLER_MODEL" "${#CODEX_USER_ARGS[@]}" "${CODEX_USER_ARGS[${#CODEX_USER_ARGS[@]} - 1]}"
+' _ "$WRAPPER")"
+[[ "$parsed" == 'MODEL= HAS=0 COUNT=10 LAST=attached' ]] || fail "delimiter must stop Codex wrapper parsing: $parsed"
+printf 'MODEL=model-a\n' > "$TMP/config/codex.conf"
+out="$(run_with_url 'https://janus.test' exec -- --model owned-looking -c model_provider=other -m model-a)"
+assert_contains "$out" 'ARG[10]=--model' 'launcher inserts saved model before delimiter arguments'
+assert_contains "$out" 'ARG[13]=--' 'delimiter preserved'
+assert_contains "$out" 'ARG[14]=--model' 'post-delimiter model preserved'
+assert_contains "$out" 'ARG[16]=-c' 'post-delimiter config preserved'
+assert_contains "$out" 'ARG[18]=-m' 'post-delimiter short model preserved'
+pass 'Codex delimiter stops wrapper parsing'
 
 # Generated TOML and all command construction remain array-safe. The marker
 # would be created if any URL, model, or config value were evaluated as shell.

@@ -32,7 +32,11 @@ for arg in "$@"; do
   case "$arg" in
     */v1/health) exit 0 ;;
     */v1/models)
-      printf '%s\n' '{"data":[{"id":"route/opus"},{"id":"route/sonnet"},{"id":"route/haiku"},{"id":"route/subagent"},{"id":"route/caller"},{"id":"openrouter/anthropic/claude-opus-4.8"},{"id":"deepseek/deepseek-v4-pro"},{"id":"zhipu/glm-4.7"}]}'
+      if [[ -n "${JANUS_TEST_CATALOG:-}" ]]; then
+        printf '%s\n' "$JANUS_TEST_CATALOG"
+      else
+        printf '%s\n' '{"data":[{"id":"route/opus"},{"id":"route/sonnet"},{"id":"route/haiku"},{"id":"route/subagent"},{"id":"route/caller"},{"id":"openrouter/anthropic/claude-opus-4.8"},{"id":"deepseek/deepseek-v4-pro"},{"id":"zhipu/glm-4.7"}]}'
+      fi
       exit 0
       ;;
   esac
@@ -78,6 +82,10 @@ set +e; out="$(run_launcher --model)"; rc=$?; set -e
 [[ $rc -eq 2 ]] && assert_contains "$out" '--model requires a value' 'bare model diagnostic' || fail 'bare --model fails'
 pass 'caller model precedence and validation'
 
+out="$(run_launcher -p prompt -- --model route/stale --model=route/stale)"
+assert_contains "$out" 'ARG[8]=--model sonnet -p prompt -- --model route/stale --model=route/stale' 'delimiter arguments preserved with launcher tier'
+pass 'Claude delimiter stops model parsing'
+
 for arg in -h --help -V --version help; do
   rm -f "$CONFIG_DIR/claude-mappings.conf"
   out="$(env PATH="$TMP/bin:/usr/bin:/bin" HOME="$TMP/no-config" "$WRAPPER" "$arg" 2>&1)"
@@ -110,6 +118,18 @@ fixture_fails empty 'OPUS_MODEL=\nSONNET_MODEL=route/sonnet\nHAIKU_MODEL=route/h
 fixture_fails newline-corruption 'OPUS_MODEL=route/opus\nbroken\nSONNET_MODEL=route/sonnet\nHAIKU_MODEL=route/haiku\nSUBAGENT_MODEL=route/subagent\nDEFAULT_TIER=sonnet\n'
 fixture_fails carriage-return 'OPUS_MODEL=route/opus\r\nSONNET_MODEL=route/sonnet\nHAIKU_MODEL=route/haiku\nSUBAGENT_MODEL=route/subagent\nDEFAULT_TIER=sonnet\n'
 pass 'strict mapping parser fixtures'
+
+rm -f "$CONFIG_DIR/claude-mappings.conf"
+custom_catalog='{"data":[{"id":"catalog/one"},{"id":"catalog/two"},{"id":"catalog/three"},{"id":"catalog/four"}]}'
+set +e
+out="$(env "${BASE_ENV[@]}" JANUS_TEST_CATALOG="$custom_catalog" "$WRAPPER" -p hi </dev/null 2>&1)"
+rc=$?
+set -e
+[[ $rc -eq 2 ]] || fail "missing Claude mappings must fail noninteractively with status 2, got $rc"
+assert_contains "$out" 'Claude mappings are missing' 'missing mappings noninteractive category'
+assert_contains "$out" 'Run claude-janus interactively' 'missing mappings corrective guidance'
+[[ ! -e "$CONFIG_DIR/claude-mappings.conf" ]] || fail 'missing mappings failure must not persist defaults'
+pass 'missing Claude mappings fail noninteractively without persistence'
 
 write_valid
 perl -0pi -e 's#route/subagent#route/stale#' "$CONFIG_DIR/claude-mappings.conf"

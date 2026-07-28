@@ -59,6 +59,22 @@ janus_ui_read_reply() {
   printf '%s' "$answer"
 }
 
+janus_ui_read_secret() {
+  local prompt="${1:-}"
+  JANUS_UI_SECRET=''
+  [[ $JANUS_UI_ENABLED -eq 1 && -n "$JANUS_UI_TTY_ORIGINAL" ]] || return 1
+  stty -echo 2>/dev/null || return 1
+  JANUS_UI_TTY_RAW=1
+  printf '%s' "$prompt" >&2
+  if ! IFS= read -r JANUS_UI_SECRET; then
+    janus_ui_tty_restore
+    printf '\n' >&2
+    return 1
+  fi
+  janus_ui_tty_restore
+  printf '\n' >&2
+}
+
 janus_ui_tty_raw() {
   [[ $JANUS_UI_ENABLED -eq 1 && $JANUS_UI_TTY_RAW -eq 0 && -n "$JANUS_UI_TTY_ORIGINAL" ]] || return 0
   stty -echo -icanon min 1 time 0 2>/dev/null || return 0

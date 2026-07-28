@@ -80,6 +80,25 @@ assert_eq "$JANUS_API_KEY" 'test-key' "caller API key"
 assert_eq "$JANUS_CATALOG_JSON" '{"data":[{"id":"provider/model"}]}' "caller catalog"
 pass "validated service remains in caller shell"
 
+for case in \
+  '1|Janus health check failed.|1' \
+  '2|Janus model catalog request failed.|2' \
+  '3|Janus model catalog response was malformed.|3' \
+  '4|Janus model catalog is empty.|4'
+do
+  IFS='|' read -r service_status expected_message expected_status <<<"$case"
+  janus_validate_service() { return "$service_status"; }
+  set +e
+  janus_load_validated_service >"$TMP/service-$service_status.out" 2>"$TMP/service-$service_status.err"
+  rc=$?
+  set -e
+  assert_eq "$rc" "$expected_status" "service category status $service_status"
+  assert_eq "$(<"$TMP/service-$service_status.err")" "Janus Launcher: $expected_message" \
+    "service category diagnostic $service_status"
+  ! grep -Fq 'test-key' "$TMP/service-$service_status.err" || fail "service diagnostic leaked API key"
+done
+pass "validated service actionable status diagnostics"
+
 janus_require_command definitely-not-a-real-command 'Example dependency' 2>"$TMP/require.err" && \
   fail "missing dependency accepted"
 grep -Fq 'Example dependency' "$TMP/require.err" || fail "dependency label omitted"

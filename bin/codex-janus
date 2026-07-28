@@ -114,6 +114,60 @@ toml_quote_string() {
   printf '"%s"' "$escaped"
 }
 
+codex_normalize_config_key() {
+  local value="$1" character quote='' escape_sequence='' segment='' normalized='' saw_equals=0 i hex decoded
+  local LC_ALL=C
+  for ((i = 0; i < ${#value}; i += 1)); do
+    character="${value:i:1}"
+    if [[ -n "$quote" ]]; then
+      if [[ -n "$escape_sequence" ]]; then
+        escape_sequence+="$character"
+        case "$escape_sequence" in
+          '\"') segment+='"'; escape_sequence='' ;;
+          '\\') segment+='\'; escape_sequence='' ;;
+          '\u'[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f])
+            hex="${escape_sequence:2}"
+            ((16#$hex > 0 && 16#$hex < 128)) || return 1
+            printf -v decoded "\\$(printf '%03o' "$((16#$hex))")"
+            segment+="$decoded"
+            escape_sequence=''
+            ;;
+          '\U'[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f])
+            hex="${escape_sequence:2}"
+            ((16#$hex > 0 && 16#$hex < 128)) || return 1
+            printf -v decoded "\\$(printf '%03o' "$((16#$hex))")"
+            segment+="$decoded"
+            escape_sequence=''
+            ;;
+          '\u'| '\u'[0-9A-Fa-f]| '\u'[0-9A-Fa-f][0-9A-Fa-f]| '\u'[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]| \
+          '\U'| '\U'[0-9A-Fa-f]| '\U'[0-9A-Fa-f][0-9A-Fa-f]| '\U'[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]| \
+          '\U'[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]| '\U'[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]| \
+          '\U'[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]| \
+          '\U'[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]) ;;
+          *) return 1 ;;
+        esac
+      elif [[ "$quote" == '"' && "$character" == '\' ]]; then
+        escape_sequence='\'
+      elif [[ "$character" == "$quote" ]]; then
+        quote=''
+      else
+        segment+="$character"
+      fi
+      continue
+    fi
+    case "$character" in
+      '"'|"'") [[ -z "$segment" ]] || return 1; quote="$character" ;;
+      ' '|$'\t') ;;
+      '.') [[ -n "$segment" ]] || return 1; normalized+="${normalized:+.}$segment"; segment='' ;;
+      '=') [[ -n "$segment" ]] || return 1; normalized+="${normalized:+.}$segment"; saw_equals=1; break ;;
+      [A-Za-z0-9_-]) segment+="$character" ;;
+      *) return 1 ;;
+    esac
+  done
+  [[ -z "$quote" && -z "$escape_sequence" && $saw_equals -eq 1 ]] || return 1
+  CODEX_NORMALIZED_CONFIG_KEY="$normalized"
+}
+
 codex_owned_config_key() {
   case "$1" in
     model_provider|model_providers.janus|model_providers.janus.*) return 0 ;;
@@ -121,11 +175,27 @@ codex_owned_config_key() {
   esac
 }
 
+codex_validate_config_value() {
+  local value="$1"
+  CODEX_NORMALIZED_CONFIG_KEY=''
+  codex_normalize_config_key "$value" || return 0
+  if codex_owned_config_key "$CODEX_NORMALIZED_CONFIG_KEY"; then
+    printf 'codex-janus: cannot override launcher-owned Codex provider configuration: %s\n' \
+      "$CODEX_NORMALIZED_CONFIG_KEY" >&2
+    return 2
+  fi
+}
+
 codex_validate_config_overrides() {
   local -a arguments=("$@")
-  local argument value key i
+  local argument value i parsing_options=1
   for ((i = 0; i < ${#arguments[@]}; i += 1)); do
     argument="${arguments[i]}"
+    if ((parsing_options)) && [[ "$argument" == -- ]]; then
+      parsing_options=0
+      continue
+    fi
+    ((parsing_options)) || continue
     case "$argument" in
       -c|--config)
         if ((i + 1 >= ${#arguments[@]})); then
@@ -139,17 +209,13 @@ codex_validate_config_overrides() {
       --config=*) value="${argument#--config=}" ;;
       *) continue ;;
     esac
-    key="${value%%=*}"
-    if codex_owned_config_key "$key"; then
-      printf 'codex-janus: cannot override launcher-owned Codex provider configuration: %s\n' "$key" >&2
-      return 2
-    fi
+    codex_validate_config_value "$value" || return
   done
 }
 
 codex_parse_arguments() {
   local -a arguments=("$@")
-  local argument i
+  local argument i parsing_options=1
   CODEX_CALLER_MODEL=''
   CODEX_HAS_CALLER_MODEL=0
   CODEX_PASSTHROUGH_ONLY=0
@@ -162,6 +228,11 @@ codex_parse_arguments() {
 
   for ((i = 0; i < ${#arguments[@]}; i += 1)); do
     argument="${arguments[i]}"
+    if ((parsing_options)) && [[ "$argument" == -- ]]; then
+      parsing_options=0
+      continue
+    fi
+    ((parsing_options)) || continue
     case "$argument" in
       -c|--config)
         ((i += 1))
