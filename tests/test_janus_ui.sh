@@ -11,14 +11,18 @@ assert_eq() {
 # The UI module is intentionally sourced before it exists during RED.
 source "$ROOT/lib/janus_ui.sh"
 
-JANUS_UI_DISABLE=1 NO_COLOR=1 janus_ui_init 'TEST PRODUCT'
+JANUS_UI_DISABLE=1 NO_COLOR=1 janus_ui_init 'CLAUDE CODE · OFFICIAL JANUS COMPANION'
 ! janus_ui_is_interactive || fail "disabled UI detected as interactive"
 [[ -z "$RESET$BOLD$DIM$CYAN$BLUE$GREEN$YELLOW$RED$MAGENTA" ]] ||
   fail "colors enabled with NO_COLOR"
 header="$(janus_ui_header 'Test title' 'Test subtitle' 2>&1)"
-[[ "$header" == *'TEST PRODUCT'* && "$header" == *'Test title'* && "$header" == *'Test subtitle'* ]] ||
+[[ "$header" == *'CLAUDE CODE · OFFICIAL JANUS COMPANION'* && "$header" == *'Test title'* && "$header" == *'Test subtitle'* ]] ||
   fail "text header missing content"
 [[ "$header" != *$'\033['* ]] || fail "text header emitted escapes"
+mapfile -t header_lines <<< "$header"
+assert_eq "${#header_lines[0]}" "${#header_lines[${#header_lines[@]} - 1]}" \
+  "header border alignment"
+assert_eq "${#header_lines[0]}" 68 "Claude header width"
 pass "noninteractive text-only UI"
 
 janus_ui_read_key < <(printf '\n')

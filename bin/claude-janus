@@ -21,7 +21,7 @@ if [[ -f "$ROOT_DIR/lib/janus_api.sh" ]]; then
 elif [[ -f "$SCRIPT_DIR/../lib/janus_api.sh" ]]; then
   JANUS_LIB_DIR="$SCRIPT_DIR/../lib"
 else
-  JANUS_LIB_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/claude-janus/lib"
+  JANUS_LIB_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/janus-launcher/lib"
 fi
 # shellcheck source=lib/janus_api.sh
 source "$JANUS_LIB_DIR/janus_api.sh"

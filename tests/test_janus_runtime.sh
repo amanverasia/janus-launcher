@@ -37,6 +37,25 @@ set -e
 [[ $rc -eq 127 && ! -s "$TMP/missing.out" ]] || fail "wrapper-only resolution returns 127"
 pass "client executable resolution skips wrapper"
 
+mkdir -p "$TMP/installed/bin" "$TMP/xdg-data/janus-launcher/lib" "$TMP/installed-child"
+cp "$ROOT/bin/claude-janus" "$TMP/installed/bin/claude-janus"
+chmod +x "$TMP/installed/bin/claude-janus"
+cp "$ROOT/lib/janus_api.sh" "$ROOT/lib/janus_config.sh" \
+  "$ROOT/lib/janus_runtime.sh" "$ROOT/lib/janus_ui.sh" \
+  "$TMP/xdg-data/janus-launcher/lib/"
+printf '#!/usr/bin/env bash\nprintf "CHILD_RESOLVED:%%s\\n" "$*"\n' > "$TMP/installed-child/claude"
+chmod +x "$TMP/installed-child/claude"
+installed_output="$(
+  HOME="$TMP/installed-home" \
+  XDG_CONFIG_HOME="$TMP/installed-config" \
+  XDG_DATA_HOME="$TMP/xdg-data" \
+  PATH="$TMP/installed-child:/usr/bin:/bin" \
+  "$TMP/installed/bin/claude-janus" --help 2>&1
+)" || fail "installed launcher loads XDG shared libraries"
+[[ "$installed_output" == *'CHILD_RESOLVED:'* ]] ||
+  fail "installed launcher did not reach child resolution"
+pass "installed launcher XDG library fallback"
+
 calls_file="$TMP/validation.calls"
 : > "$calls_file"
 janus_config_init_paths() { JANUS_ROUTER_CONFIG="$TMP/router.conf"; }

@@ -164,10 +164,13 @@ janus_ui_prepare_screen() {
 }
 
 janus_ui_header() {
-  local title="$1" subtitle="${2:-}"
+  local title="$1" subtitle="${2:-}" separator_width separator
   janus_ui_prepare_screen
-  printf '%s╭─ %s ─────────────────────────────────────────────────────────────%s\n' \
-    "$CYAN" "$JANUS_UI_PRODUCT" "$RESET" >&2
+  separator_width=$((64 - ${#JANUS_UI_PRODUCT}))
+  ((separator_width >= 0)) || separator_width=0
+  printf -v separator '%*s' "$separator_width" ''
+  separator="${separator// /─}"
+  printf '%s╭─ %s %s%s\n' "$CYAN" "$JANUS_UI_PRODUCT" "$separator" "$RESET" >&2
   printf '│ %s%s%s\n' "$BOLD" "$title" "$RESET" >&2
   [[ -z "$subtitle" ]] || printf '│ %s%s%s\n' "$DIM" "$subtitle" "$RESET" >&2
   printf '%s╰───────────────────────────────────────────────────────────────────%s\n\n' "$CYAN" "$RESET" >&2
