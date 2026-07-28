@@ -5,6 +5,7 @@ import pty
 import re
 import select
 import tempfile
+import termios
 import time
 from pathlib import Path
 
@@ -24,15 +25,20 @@ for client in ("claude", "codex"):
     command.chmod(0o755)
 
 
-def run_picker(keys: bytes) -> tuple[str, int]:
+def relevant_termios(attributes: list) -> tuple:
+    return (*attributes[:4], attributes[6][termios.VMIN], attributes[6][termios.VTIME])
+
+
+def run_picker(keys: bytes) -> tuple[str, bytes, int, bool]:
     launcher = APP / "janus-launcher"
     if not launcher.exists():
-        return "dispatcher missing", 127
+        return "dispatcher missing", b"", 127, False
     env = os.environ.copy()
     env.update(PATH="/usr/bin:/bin", HOME=str(TMP / "home"), TERM="xterm-256color")
     pid, fd = pty.fork()
     if pid == 0:
         os.execve(str(launcher), ["janus-launcher"], env)
+    before = relevant_termios(termios.tcgetattr(fd))
     raw = bytearray()
     deadline = time.time() + 5
     while b"Choose a client" not in raw and time.time() < deadline:
@@ -67,22 +73,26 @@ def run_picker(keys: bytes) -> tuple[str, int]:
             raw.extend(os.read(fd, 65536))
         except OSError:
             break
-    text = re.sub(rb"\x1b\[[0-9;?]*[ -/]*[@-~]", b"", bytes(raw)).decode("utf-8", "replace")
-    return text, os.waitstatus_to_exitcode(status)
+    after = relevant_termios(termios.tcgetattr(fd))
+    raw_bytes = bytes(raw)
+    text = re.sub(rb"\x1b\[[0-9;?]*[ -/]*[@-~]", b"", raw_bytes).decode("utf-8", "replace")
+    return text, raw_bytes, os.waitstatus_to_exitcode(status), after == before
 
 
 cases = (
-    ("Claude", b"\r", "DELEGATED=claude ARGC=0", 0),
+    ("Claude", b"\x1b[B\x1b[A\r", "DELEGATED=claude ARGC=0", 0),
     ("Codex", b"\x1b[B\r", "DELEGATED=codex ARGC=0", 0),
-    ("cancel", b"\x1b", "Usage: janus-launcher {claude|codex} [arguments...]", 130),
+    ("cancel", b"\x1b[B\x1b", "Usage: janus-launcher {claude|codex} [arguments...]", 130),
 )
 ok_all = True
 for label, keys, expected, expected_status in cases:
-    output, status = run_picker(keys)
+    output, raw_output, status, terminal_restored = run_picker(keys)
+    arrow_input = b"\x1b[B" if b"\x1b[B" in keys else None
     checks = {
         "delegation": expected in output,
         "status": status == expected_status,
-        "terminal clean": "\x1b[A" not in output and "\x1b[B" not in output and "^[[" not in output,
+        "terminal restored": terminal_restored,
+        "raw arrow input not leaked": arrow_input is None or arrow_input not in raw_output,
     }
     for name, ok in checks.items():
         print(("PASS" if ok else "FAIL"), f"{label} {name}")

@@ -35,6 +35,35 @@ assert_mode "$fresh/config/janus-launcher/router.conf" 600
 [[ "$output" == *'Installed janus-launcher'* && "$output" == *'Installed claude-janus'* && "$output" == *'Installed codex-janus'* && "$output" == *'PATH'* ]] || fail 'new identity install output'
 pass 'fresh layout, modes, and output'
 
+mkdir -p "$fresh/fake-clients"
+for client in claude codex; do
+  cat > "$fresh/fake-clients/$client" <<EOF
+#!/usr/bin/env bash
+printf 'CLIENT=$client\n'
+printf 'ARGC=%d\n' "\$#"
+i=0
+for arg in "\$@"; do printf 'ARG[%d]=<%s>\n' "\$i" "\$arg"; ((i += 1)); done
+EOF
+  chmod +x "$fresh/fake-clients/$client"
+done
+installed_env=(
+  "HOME=$fresh/home"
+  "XDG_CONFIG_HOME=$fresh/config"
+  "XDG_DATA_HOME=$fresh/data"
+  "PATH=$fresh/commands:$fresh/fake-clients:/usr/bin:/bin"
+)
+output="$(env "${installed_env[@]}" "$fresh/commands/claude-janus" --version)"
+[[ "$output" == $'CLIENT=claude\nARGC=1\nARG[0]=<--version>' ]] || fail 'installed Claude launcher did not reach fake client through installed layout'
+output="$(env "${installed_env[@]}" "$fresh/commands/codex-janus" --version)"
+[[ "$output" == $'CLIENT=codex\nARGC=1\nARG[0]=<--version>' ]] || fail 'installed Codex launcher did not reach fake client through installed layout'
+pass 'installed dedicated launchers load installed libraries and reach fake clients'
+
+output="$(env "${installed_env[@]}" "$fresh/commands/janus-launcher" claude --version)"
+[[ "$output" == $'CLIENT=claude\nARGC=1\nARG[0]=<--version>' ]] || fail 'installed dispatcher did not delegate to sibling Claude launcher'
+output="$(env "${installed_env[@]}" "$fresh/commands/janus-launcher" codex --version)"
+[[ "$output" == $'CLIENT=codex\nARGC=1\nARG[0]=<--version>' ]] || fail 'installed dispatcher did not delegate to sibling Codex launcher'
+pass 'installed dispatcher delegates through both installed sibling launchers'
+
 before="$(sha256sum "$fresh/config/janus-launcher/router.conf")"
 run_install "$fresh" >/dev/null
 after="$(sha256sum "$fresh/config/janus-launcher/router.conf")"
