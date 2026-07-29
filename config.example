@@ -1,5 +1,5 @@
-# Claude Janus router configuration
-# This file should be stored at ~/.config/claude-janus/router.conf (mode 600).
+# Janus Launcher router configuration
+# This file should be stored at ~/.config/janus-launcher/router.conf (mode 600).
 # Do not commit a real API key.
 
 JANUS_BASE_URL=https://your-janus-router.example

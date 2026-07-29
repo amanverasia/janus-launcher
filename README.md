@@ -1,191 +1,142 @@
-# claude-janus
+# Janus Launcher
 
-**Official [Claude Code](https://docs.anthropic.com/en/docs/claude-code) companion for [Janus](https://github.com/amanverasia/Janus)** — the multi-provider AI gateway.
+**Claude Code and Codex launchers for [Janus](https://github.com/amanverasia/Janus)**, the multi-provider AI gateway.
 
-`claude-janus` launches Claude Code through your Janus router's Anthropic-compatible Messages API. It keeps separate model mappings for Claude Code's **Opus**, **Sonnet**, and **Haiku** tiers, provides a keyboard-driven terminal UI, and leaves your shell profile untouched.
-
-For Janus server setup and other client options, see the [Janus client-setup guide](https://amanverasia.github.io/Janus/client-setup/).
-
-## Features
-
-- Independent Opus, Sonnet, and Haiku model mappings
-- **Live catalog** — tier menus query authenticated `GET /v1/models` and show models your Janus instance actually exposes
-- Interactive first-run setup with localhost Janus detection
-- Full-screen terminal menu with arrow-key navigation
-- Number and letter shortcuts
-- Saved default startup tier
-- Authenticated `/v1/models` validation for custom model IDs
-- Isolated environment: does not modify your shell profile
-- Script-friendly dry-run and non-interactive modes
-- Router credentials stored outside the executable
+Janus Launcher keeps one private Janus connection and delegates to focused client launchers. Claude Code uses four independent role mappings through Janus's Anthropic-compatible Messages API. Codex uses one model through Janus's OpenAI Responses API. The launchers do not modify shell profiles or the user's normal Codex configuration.
 
 ## Requirements
 
 - Bash 4+
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) available as `claude`
 - `curl`
-- `jq` (used to validate custom model IDs)
-- A Janus router exposing:
-  - `GET /v1/models`
-  - `POST /v1/messages`
-  - Bearer-token authentication
+- `jq`
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) as `claude` when launching Claude
+- [Codex CLI](https://github.com/openai/codex) as `codex` when launching Codex
+- A Janus router exposing authenticated `GET /v1/models`, `GET /v1/health`, `POST /v1/messages` for Claude, and `POST /v1/responses` for Codex
+
+Installation itself does not require either client executable. Python 3 is needed only for the repository's pseudo-terminal tests.
 
 ## Install
 
 ```bash
-git clone https://github.com/amanverasia/claude-janus.git
-cd claude-janus
+git clone https://github.com/amanverasia/janus-launcher.git
+cd janus-launcher
 ./install.sh
 ```
 
-The installer places the launcher at:
+The installer creates these commands in `${JANUS_LAUNCHER_INSTALL_DIR:-$HOME/.local/bin}`:
 
 ```text
-~/.local/bin/claude-janus
+janus-launcher
+claude-janus
+codex-janus
 ```
 
-and creates this private configuration file if it does not exist:
+Shared libraries are installed under `${XDG_DATA_HOME:-$HOME/.local/share}/janus-launcher/lib`. Ensure the command directory is on `PATH`.
+
+## Usage
+
+Use the dispatcher explicitly:
+
+```bash
+janus-launcher claude
+janus-launcher codex
+```
+
+Or invoke a dedicated launcher:
+
+```bash
+claude-janus
+codex-janus
+```
+
+Running `janus-launcher` without arguments opens an interactive client picker. In a noninteractive terminal it prints usage and fails instead of prompting. Arguments after the selected client pass through as an unchanged argument vector:
+
+```bash
+janus-launcher claude -p "Explain this repository"
+janus-launcher codex exec "Review these changes"
+```
+
+Top-level client information commands (`-h`, `--help`, `-V`, `--version`, and `help`) bypass Janus setup and model selection. Other arguments retain the launcher's normal validation and routing behavior.
+
+## Configuration and precedence
+
+The default private configuration root is `${XDG_CONFIG_HOME:-$HOME/.config}/janus-launcher`, or `JANUS_LAUNCHER_CONFIG_DIR` when set:
 
 ```text
-~/.config/claude-janus/router.conf
+router.conf
+claude-mappings.conf
+codex.conf
 ```
 
-Edit it:
+`router.conf` stores the shared connection:
 
 ```ini
 JANUS_BASE_URL=https://your-janus-router.example
 JANUS_API_KEY=replace-with-your-key
 ```
 
-The base URL should normally omit `/v1`; Claude Code appends `/v1/messages`. If your URL already includes `/v1`, `claude-janus` normalizes it.
+`JANUS_LAUNCHER_BASE_URL` and `JANUS_LAUNCHER_API_KEY` override the corresponding file values for one invocation. `JANUS_LAUNCHER_CONFIG_DIR` overrides the entire configuration root. For noninteractive first-run setup, set both `JANUS_LAUNCHER_SETUP_BASE_URL` and `JANUS_LAUNCHER_SETUP_API_KEY`. The installer also accepts `JANUS_LAUNCHER_INSTALL_DIR`; standard `XDG_CONFIG_HOME` and `XDG_DATA_HOME` control their respective default roots.
 
-Make sure `~/.local/bin` is on your `PATH`.
+This release is a clean break from `claude-janus`: it does not read or migrate `~/.config/claude-janus` and does not honor legacy `CLAUDE_JANUS_*`, `JANUS_BASE_URL`, or `JANUS_API_KEY` launcher overrides. Reconfigure Janus in the new `router.conf`; keep or remove the old directory separately.
 
-## First-run setup
+The configuration directory is mode `700`, and `router.conf` and model state are mode `600`. Re-running the installer validates and preserves a valid existing `router.conf`; malformed configuration is rejected rather than overwritten.
 
-On the first launch, if `router.conf` is missing or still contains placeholders, `claude-janus` runs interactive setup:
+## Claude Code
 
-1. Probes `http://127.0.0.1:20128` and `http://localhost:20128` for a local Janus `/v1/health` endpoint
-2. Prompts for a Janus base URL and API key if needed
-3. Writes `router.conf` at mode `600`
+`claude-mappings.conf` stores independent routes for:
 
-For CI or scripted installs, skip the prompts by exporting both setup variables before the first run:
+```ini
+OPUS_MODEL=provider/model-id
+SONNET_MODEL=provider/model-id
+HAIKU_MODEL=provider/model-id
+SUBAGENT_MODEL=provider/model-id
+DEFAULT_TIER=sonnet
+```
+
+Claude starts with the saved tier and keeps Claude Code's `opus`, `sonnet`, and `haiku` interface while routing each tier to its mapped Janus model. Subagents use their independent mapping. Set `JANUS_LAUNCHER_CLAUDE_TIER=opus|sonnet|haiku` for a scriptable launch. If required mappings are unavailable in a noninteractive invocation, the launcher fails with corrective guidance instead of opening a menu.
+
+## Codex
+
+`codex.conf` stores exactly one route:
+
+```ini
+MODEL=provider/model-id
+```
+
+The launcher passes temporary `-c` provider overrides to Codex with a normalized `<Janus base>/v1`, `wire_api="responses"`, and the API key delivered through `JANUS_LAUNCHER_CODEX_API_KEY`. It does not edit `~/.codex/config.toml`, create a profile, or make a generation probe. Therefore the Janus deployment must implement `POST /v1/responses`.
+
+Caller `-m MODEL`, `--model MODEL`, and `--model=MODEL` selections take precedence for that invocation without rewriting saved state. A missing or stale model opens the catalog picker only on an interactive terminal; noninteractive use fails with corrective guidance.
+
+The launchers reserve the temporary Janus provider keys they own but preserve unrelated Codex `-c` overrides and other client arguments.
+
+## Automation and troubleshooting
+
+Inspect launch construction without executing a client:
 
 ```bash
-export CLAUDE_JANUS_SETUP_BASE_URL='http://127.0.0.1:20128'
-export CLAUDE_JANUS_SETUP_API_KEY='sk-janus-yourkey'
-CLAUDE_JANUS_TIER=sonnet CLAUDE_JANUS_DRYRUN=1 CLAUDE_JANUS_SKIP_CHECK=1 claude-janus
+JANUS_LAUNCHER_DRY_RUN=1 JANUS_LAUNCHER_CLAUDE_TIER=sonnet claude-janus
+JANUS_LAUNCHER_DRY_RUN=1 codex-janus -m provider/model-id
 ```
 
-This writes `router.conf` non-interactively. Environment variables (`JANUS_BASE_URL`, `JANUS_API_KEY`) still override the file on every run.
-
-## Usage
-
-```bash
-claude-janus
-```
-
-### Keyboard controls
-
-| Key | Action |
-| --- | --- |
-| `↑` / `↓` | Move selection |
-| `Enter` | Select highlighted option |
-| `Home` / `End` | Jump to first/last option |
-| `Esc` | Back or cancel |
-| `1`–`9` | Select by number |
-| `o`, `s`, `h`, `c` | Contextual shortcuts |
-
-Use **Configure mappings** to assign router models independently to Opus, Sonnet, Haiku, and Claude Code subagents. The menu loads your Janus **live catalog** when reachable: verified presets appear only if Janus advertises them, and additional models from `/v1/models` are listed as "From Janus" options. If the catalog is unavailable, the menu falls back to built-in presets.
-
-Mappings are saved at:
-
-```text
-~/.config/claude-janus/mappings.conf
-```
-
-Existing mapping files without `SUBAGENT_MODEL` continue to work: the subagent route inherits the effective saved Sonnet mapping until a separate subagent mapping is chosen and saved. The subagent route is not a primary startup tier; `CLAUDE_JANUS_TIER` and Claude Code's `/model` selector remain `opus`, `sonnet`, or `haiku`.
-
-Inside Claude Code, `/model` switches between the saved primary tier mappings.
-
-## Non-interactive usage
-
-Choose a tier without opening the menu:
-
-```bash
-CLAUDE_JANUS_TIER=sonnet claude-janus -p "Explain this repository"
-```
-
-Inspect the generated command and environment without launching Claude Code:
-
-```bash
-CLAUDE_JANUS_DRYRUN=1 CLAUDE_JANUS_TIER=haiku claude-janus
-```
-
-Override router configuration for one invocation:
-
-```bash
-JANUS_BASE_URL=https://router.example \
-JANUS_API_KEY=your-key \
-CLAUDE_JANUS_TIER=opus \
-claude-janus
-```
-
-Skip the optional startup reachability check:
-
-```bash
-CLAUDE_JANUS_SKIP_CHECK=1 claude-janus
-```
-
-Fail instead of warning when the health check does not pass:
-
-```bash
-CLAUDE_JANUS_STRICT_CHECK=1 claude-janus
-```
-
-By default, a failed `/v1/health` or authenticated `/v1/models` check prints a warning and Claude Code still launches. With `CLAUDE_JANUS_STRICT_CHECK=1`, the launcher exits before starting Claude Code.
-
-Use another configuration path:
-
-```bash
-CLAUDE_JANUS_CONFIG=/path/to/router.conf claude-janus
-```
-
-## How it works
-
-The launcher sets these variables only for the child Claude Code process:
-
-```text
-ANTHROPIC_BASE_URL
-ANTHROPIC_AUTH_TOKEN
-ANTHROPIC_API_KEY=""
-ANTHROPIC_DEFAULT_OPUS_MODEL
-ANTHROPIC_DEFAULT_SONNET_MODEL
-ANTHROPIC_DEFAULT_HAIKU_MODEL
-CLAUDE_CODE_SUBAGENT_MODEL
-```
-
-`CLAUDE_CODE_SUBAGENT_MODEL` comes from the independently saved `SUBAGENT_MODEL` route. It does not change the primary `--model` argument.
-
-It deliberately leaves `ANTHROPIC_MODEL` unset and starts Claude Code with `--model opus`, `--model sonnet`, or `--model haiku`. This avoids fighting Claude Code's internal model selector.
-
-## Security
-
-- Never commit a real API key.
-- Keep `router.conf` at mode `600`.
-- The installer does not overwrite an existing `router.conf`.
-- Environment variables override the config file, which is useful for secret managers and CI.
-- This launcher blanks `ANTHROPIC_API_KEY` to avoid accidental fallback to unrelated Anthropic credentials.
+Dry-run output redacts the API key. If a dedicated client executable is absent, its launcher exits `127`. Janus validation requires `curl` and `jq`; diagnostics identify missing dependencies or invalid configuration without printing secrets. Client endpoint errors, including a Janus deployment without Responses API support, pass through from the client unchanged.
 
 ## Updating
 
 ```bash
-cd claude-janus
-git pull
+cd janus-launcher
+git pull https://github.com/amanverasia/janus-launcher.git
 ./install.sh
 ```
 
-Your existing router configuration and tier mappings are preserved.
+Valid new-format router configuration and model state are preserved.
+
+## Security
+
+- Never commit a real API key.
+- Keep the configuration directory private and `router.conf` at mode `600`.
+- Prefer `JANUS_LAUNCHER_API_KEY` from a secret manager for ephemeral credentials.
+- The key is never placed in client arguments, dry-run command output, or diagnostics.
+- Claude receives the credential only in its child environment; Codex reads it through the named temporary provider environment key.
 
 ## License
 

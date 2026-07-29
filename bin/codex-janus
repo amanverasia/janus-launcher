@@ -1,0 +1,331 @@
+#!/usr/bin/env bash
+# codex-janus — Codex invocation and Janus provider contract.
+set -euo pipefail
+umask 077
+
+ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "$ROOT_DIR/lib/janus_api.sh" ]]; then
+  JANUS_LIB_DIR="$ROOT_DIR/lib"
+elif [[ -f "$SCRIPT_DIR/../lib/janus_api.sh" ]]; then
+  JANUS_LIB_DIR="$SCRIPT_DIR/../lib"
+else
+  JANUS_LIB_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/janus-launcher/lib"
+fi
+# shellcheck source=lib/janus_api.sh
+source "$JANUS_LIB_DIR/janus_api.sh"
+# shellcheck source=lib/janus_config.sh
+source "$JANUS_LIB_DIR/janus_config.sh"
+# shellcheck source=lib/janus_runtime.sh
+source "$JANUS_LIB_DIR/janus_runtime.sh"
+# shellcheck source=lib/janus_ui.sh
+source "$JANUS_LIB_DIR/janus_ui.sh"
+
+codex_valid_model_value() {
+  [[ -n "$1" && "$1" != *$'\n'* && "$1" != *$'\r'* ]]
+}
+
+codex_load_model() {
+  local file="$1" line value raw_bytes visible_bytes
+  CODEX_SAVED_MODEL=''
+  [[ -f "$file" ]] || return 1
+  IFS= read -r line < "$file" || [[ -n "$line" ]] || return 1
+  raw_bytes="$(wc -c < "$file")" || return 1
+  visible_bytes="$(LC_ALL=C printf '%s\n' "$line" | wc -c)" || return 1
+  [[ "$raw_bytes" -eq "$visible_bytes" ]] || return 1
+  [[ "$line" == MODEL=* ]] || return 1
+  value="${line#MODEL=}"
+  codex_valid_model_value "$value" || return 1
+  [[ "$(wc -l < "$file")" -eq 1 && "$(tail -c 1 "$file" 2>/dev/null || true)" == '' ]] || return 1
+  CODEX_SAVED_MODEL="$value"
+}
+
+codex_save_model() {
+  local file="$1" model="$2" directory temporary
+  codex_valid_model_value "$model" || return 1
+  directory="$(dirname -- "$file")"
+  mkdir -p -- "$directory" && chmod 700 -- "$directory" || return 1
+  [[ ! -d "$file" ]] || return 1
+  temporary="$(mktemp "$directory/.codex.conf.XXXXXX")" || return 1
+  if ! chmod 600 -- "$temporary" || ! printf 'MODEL=%s\n' "$model" > "$temporary" ||
+    ! mv -fT -- "$temporary" "$file" || [[ ! -f "$file" ]]; then
+    rm -f -- "$temporary"
+    return 1
+  fi
+}
+
+codex_validate_model() {
+  local catalog="$1" model="$2"
+  codex_valid_model_value "$model" && janus_catalog_contains "$catalog" "$model"
+}
+
+codex_render_model_picker() {
+  local cursor="$1"
+  shift
+  local -a models=("$@")
+  local i number
+  janus_ui_header 'Select a Codex model' 'Choose one exact model from the current Janus catalog.'
+  for i in "${!models[@]}"; do
+    number=$((i + 1))
+    janus_ui_choice "$cursor" "$number" "$number" "${models[i]}"
+  done
+  printf '\n  %s↑/↓ move · Enter select · Esc/Q cancel%s\n' "$DIM" "$RESET" >&2
+}
+
+codex_select_model() {
+  local catalog="$1"
+  local -a models=()
+  local selected
+  jq -e 'all(.data[]; (.id | index("\n") == null) and (.id | index("\r") == null))' \
+    >/dev/null 2>&1 <<<"$catalog" || return 1
+  mapfile -t models < <(janus_extract_model_ids "$catalog") || return
+  ((${#models[@]} > 0)) || return 1
+  janus_ui_is_interactive || return 1
+  janus_ui_navigate "${#models[@]}" 1 codex_render_model_picker '' "${models[@]}"
+  selected="$JANUS_UI_RESULT"
+  [[ "$selected" != back ]] || return 1
+  CODEX_SELECTED_MODEL="${models[selected - 1]}"
+}
+
+# Print VALUE as a TOML basic string. Bash cannot contain NUL; every other C0
+# control byte and DEL is escaped so generated configuration is always valid.
+toml_quote_string() {
+  local value="$1" character escaped='' ordinal i
+  local LC_ALL=C
+  for ((i = 0; i < ${#value}; i += 1)); do
+    character="${value:i:1}"
+    case "$character" in
+      '"') escaped+='\"' ;;
+      '\') escaped+='\\' ;;
+      $'\b') escaped+='\b' ;;
+      $'\t') escaped+='\t' ;;
+      $'\n') escaped+='\n' ;;
+      $'\f') escaped+='\f' ;;
+      $'\r') escaped+='\r' ;;
+      *)
+        printf -v ordinal '%d' "'$character"
+        if ((ordinal < 32 || ordinal == 127)); then
+          printf -v character '\\u%04X' "$ordinal"
+        fi
+        escaped+="$character"
+        ;;
+    esac
+  done
+  printf '"%s"' "$escaped"
+}
+
+codex_normalize_config_key() {
+  local value="$1" character quote='' escape_sequence='' segment='' normalized='' saw_equals=0 i hex decoded
+  local LC_ALL=C
+  for ((i = 0; i < ${#value}; i += 1)); do
+    character="${value:i:1}"
+    if [[ -n "$quote" ]]; then
+      if [[ -n "$escape_sequence" ]]; then
+        escape_sequence+="$character"
+        case "$escape_sequence" in
+          '\"') segment+='"'; escape_sequence='' ;;
+          '\\') segment+='\'; escape_sequence='' ;;
+          '\u'[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f])
+            hex="${escape_sequence:2}"
+            ((16#$hex > 0 && 16#$hex < 128)) || return 1
+            printf -v decoded "\\$(printf '%03o' "$((16#$hex))")"
+            segment+="$decoded"
+            escape_sequence=''
+            ;;
+          '\U'[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f])
+            hex="${escape_sequence:2}"
+            ((16#$hex > 0 && 16#$hex < 128)) || return 1
+            printf -v decoded "\\$(printf '%03o' "$((16#$hex))")"
+            segment+="$decoded"
+            escape_sequence=''
+            ;;
+          '\u'| '\u'[0-9A-Fa-f]| '\u'[0-9A-Fa-f][0-9A-Fa-f]| '\u'[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]| \
+          '\U'| '\U'[0-9A-Fa-f]| '\U'[0-9A-Fa-f][0-9A-Fa-f]| '\U'[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]| \
+          '\U'[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]| '\U'[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]| \
+          '\U'[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]| \
+          '\U'[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]) ;;
+          *) return 1 ;;
+        esac
+      elif [[ "$quote" == '"' && "$character" == '\' ]]; then
+        escape_sequence='\'
+      elif [[ "$character" == "$quote" ]]; then
+        quote=''
+      else
+        segment+="$character"
+      fi
+      continue
+    fi
+    case "$character" in
+      '"'|"'") [[ -z "$segment" ]] || return 1; quote="$character" ;;
+      ' '|$'\t') ;;
+      '.') [[ -n "$segment" ]] || return 1; normalized+="${normalized:+.}$segment"; segment='' ;;
+      '=') [[ -n "$segment" ]] || return 1; normalized+="${normalized:+.}$segment"; saw_equals=1; break ;;
+      [A-Za-z0-9_-]) segment+="$character" ;;
+      *) return 1 ;;
+    esac
+  done
+  [[ -z "$quote" && -z "$escape_sequence" && $saw_equals -eq 1 ]] || return 1
+  CODEX_NORMALIZED_CONFIG_KEY="$normalized"
+}
+
+codex_owned_config_key() {
+  case "$1" in
+    model_provider|model_providers|model_providers.janus|model_providers.janus.*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+codex_validate_config_value() {
+  local value="$1"
+  CODEX_NORMALIZED_CONFIG_KEY=''
+  codex_normalize_config_key "$value" || return 0
+  if codex_owned_config_key "$CODEX_NORMALIZED_CONFIG_KEY"; then
+    printf 'codex-janus: cannot override launcher-owned Codex provider configuration: %s\n' \
+      "$CODEX_NORMALIZED_CONFIG_KEY" >&2
+    return 2
+  fi
+}
+
+codex_validate_config_overrides() {
+  local -a arguments=("$@")
+  local argument value i parsing_options=1
+  for ((i = 0; i < ${#arguments[@]}; i += 1)); do
+    argument="${arguments[i]}"
+    if ((parsing_options)) && [[ "$argument" == -- ]]; then
+      parsing_options=0
+      continue
+    fi
+    ((parsing_options)) || continue
+    case "$argument" in
+      -c|--config)
+        if ((i + 1 >= ${#arguments[@]})); then
+          printf 'codex-janus: %s requires a value\n' "$argument" >&2
+          return 2
+        fi
+        ((i += 1))
+        value="${arguments[i]}"
+        ;;
+      -c=*) value="${argument#-c=}" ;;
+      --config=*) value="${argument#--config=}" ;;
+      *) continue ;;
+    esac
+    codex_validate_config_value "$value" || return
+  done
+}
+
+codex_parse_arguments() {
+  local -a arguments=("$@")
+  local argument i parsing_options=1
+  CODEX_CALLER_MODEL=''
+  CODEX_HAS_CALLER_MODEL=0
+  CODEX_PASSTHROUGH_ONLY=0
+  CODEX_USER_ARGS=("$@")
+
+  if janus_is_top_level_passthrough "$@"; then
+    CODEX_PASSTHROUGH_ONLY=1
+  fi
+  codex_validate_config_overrides "$@" || return
+
+  for ((i = 0; i < ${#arguments[@]}; i += 1)); do
+    argument="${arguments[i]}"
+    if ((parsing_options)) && [[ "$argument" == -- ]]; then
+      parsing_options=0
+      continue
+    fi
+    ((parsing_options)) || continue
+    case "$argument" in
+      -c|--config)
+        ((i += 1))
+        continue
+        ;;
+      -c=*|--config=*) continue ;;
+      --model|-m)
+        if ((i + 1 >= ${#arguments[@]})) || [[ -z "${arguments[i + 1]}" ]]; then
+          printf 'codex-janus: %s requires a value\n' "$argument" >&2
+          return 2
+        fi
+        CODEX_CALLER_MODEL="${arguments[i + 1]}"
+        CODEX_HAS_CALLER_MODEL=1
+        ((i += 1))
+        ;;
+      --model=*)
+        CODEX_CALLER_MODEL="${argument#--model=}"
+        if [[ -z "$CODEX_CALLER_MODEL" ]]; then
+          printf 'codex-janus: --model requires a value\n' >&2
+          return 2
+        fi
+        CODEX_HAS_CALLER_MODEL=1
+        ;;
+      -m?*)
+        CODEX_CALLER_MODEL="${argument#-m}"
+        CODEX_HAS_CALLER_MODEL=1
+        ;;
+    esac
+  done
+}
+
+codex_build_provider_arguments() {
+  local api_root="$1"
+  CODEX_PROVIDER_ARGS=(
+    -c 'model_provider="janus"'
+    -c 'model_providers.janus.name="Janus"'
+    -c "model_providers.janus.base_url=$(toml_quote_string "$api_root")"
+    -c 'model_providers.janus.env_key="JANUS_LAUNCHER_CODEX_API_KEY"'
+    -c 'model_providers.janus.wire_api="responses"'
+  )
+}
+
+codex_build_command() {
+  local codex_bin="$1" model="$2"
+  shift 2
+  CODEX_COMMAND=("$codex_bin" "${CODEX_PROVIDER_ARGS[@]}")
+  if ((CODEX_HAS_CALLER_MODEL == 0)); then
+    [[ -n "$model" ]] || { printf 'codex-janus: a model is required\n' >&2; return 2; }
+    CODEX_COMMAND+=(--model "$model")
+  fi
+  CODEX_COMMAND+=("$@")
+}
+
+if [[ "${CODEX_JANUS_SOURCE_ONLY:-}" == 1 ]]; then
+  return 0 2>/dev/null || exit 0
+fi
+
+CODEX_BIN="$(janus_resolve_client_executable codex "${BASH_SOURCE[0]}" || true)"
+[[ -x "$CODEX_BIN" ]] || { printf 'codex-janus: Codex binary not found\n' >&2; exit 127; }
+if janus_is_top_level_passthrough "$@"; then
+  exec "$CODEX_BIN" "$@"
+fi
+codex_parse_arguments "$@" || exit $?
+janus_load_validated_service || exit $?
+janus_ui_init 'JANUS LAUNCHER · CODEX'
+if ((CODEX_HAS_CALLER_MODEL)); then
+  if ! codex_validate_model "$JANUS_CATALOG_JSON" "$CODEX_CALLER_MODEL"; then
+    printf 'codex-janus: requested model is not available in the Janus catalog: %s\n' "$CODEX_CALLER_MODEL" >&2
+    exit 2
+  fi
+  CODEX_EFFECTIVE_MODEL="$CODEX_CALLER_MODEL"
+elif codex_load_model "$JANUS_CODEX_CONFIG" &&
+  codex_validate_model "$JANUS_CATALOG_JSON" "$CODEX_SAVED_MODEL"; then
+  CODEX_EFFECTIVE_MODEL="$CODEX_SAVED_MODEL"
+elif janus_ui_is_interactive && codex_select_model "$JANUS_CATALOG_JSON"; then
+  CODEX_EFFECTIVE_MODEL="$CODEX_SELECTED_MODEL"
+  codex_save_model "$JANUS_CODEX_CONFIG" "$CODEX_EFFECTIVE_MODEL" || {
+    printf 'codex-janus: cannot save Codex model selection: %s\n' "$JANUS_CODEX_CONFIG" >&2
+    exit 2
+  }
+else
+  printf 'codex-janus: no valid saved Codex model is available.\n' >&2
+  printf 'Run codex-janus --model MODEL once with a model from the Janus catalog, or run codex-janus interactively to choose one.\n' >&2
+  exit 2
+fi
+codex_build_provider_arguments "$(janus_api_root "$JANUS_BASE_URL")"
+codex_build_command "$CODEX_BIN" "$CODEX_EFFECTIVE_MODEL" "${CODEX_USER_ARGS[@]}" || exit $?
+export JANUS_LAUNCHER_CODEX_API_KEY="$JANUS_API_KEY"
+if [[ "${JANUS_LAUNCHER_DRY_RUN:-}" == 1 ]]; then
+  printf '[dry-run] would exec:'
+  printf ' %q' "${CODEX_COMMAND[@]}"
+  printf '\n'
+  printf '[dry-run] JANUS_LAUNCHER_CODEX_API_KEY=<set>\n'
+  exit 0
+fi
+exec "${CODEX_COMMAND[@]}"

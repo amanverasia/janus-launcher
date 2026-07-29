@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+
+pass() { printf 'PASS %s\n' "$1"; }
+fail() { printf 'FAIL %s\n' "$1" >&2; exit 1; }
+assert_eq() {
+  [[ "$1" == "$2" ]] || fail "$3: expected '$2', got '$1'"
+}
+
+# The runtime module is intentionally sourced before it exists during RED.
+source "$ROOT/lib/janus_api.sh"
+source "$ROOT/lib/janus_runtime.sh"
+
+janus_is_top_level_passthrough --help || fail "--help passthrough"
+janus_is_top_level_passthrough help --verbose || fail "help passthrough"
+janus_is_top_level_passthrough -V || fail "-V passthrough"
+! janus_is_top_level_passthrough exec --help || fail "nested help bypassed setup"
+! janus_is_top_level_passthrough -p 'explain -h' || fail "prompt text bypassed setup"
+pass "first-position passthrough detection"
+
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+mkdir -p "$TMP/first" "$TMP/second"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$TMP/first/claude-janus"
+chmod +x "$TMP/first/claude-janus"
+ln -s claude-janus "$TMP/first/claude"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$TMP/second/claude"
+chmod +x "$TMP/second/claude"
+resolved="$(PATH="$TMP/first:$TMP/second:/usr/bin:/bin" janus_resolve_client_executable claude "$TMP/first/claude-janus")" \
+  || fail "resolve child after wrapper"
+assert_eq "$resolved" "$TMP/second/claude" "resolved executable"
+set +e
+PATH="$TMP/first:/usr/bin:/bin" janus_resolve_client_executable claude "$TMP/first/claude-janus" >"$TMP/missing.out"
+rc=$?
+set -e
+[[ $rc -eq 127 && ! -s "$TMP/missing.out" ]] || fail "wrapper-only resolution returns 127"
+pass "client executable resolution skips wrapper"
+
+mkdir -p "$TMP/installed/bin" "$TMP/xdg-data/janus-launcher/lib" "$TMP/installed-child"
+cp "$ROOT/bin/claude-janus" "$TMP/installed/bin/claude-janus"
+chmod +x "$TMP/installed/bin/claude-janus"
+cp "$ROOT/lib/janus_api.sh" "$ROOT/lib/janus_config.sh" \
+  "$ROOT/lib/janus_runtime.sh" "$ROOT/lib/janus_ui.sh" \
+  "$TMP/xdg-data/janus-launcher/lib/"
+printf '#!/usr/bin/env bash\nprintf "CHILD_RESOLVED:%%s\\n" "$*"\n' > "$TMP/installed-child/claude"
+chmod +x "$TMP/installed-child/claude"
+installed_output="$(
+  HOME="$TMP/installed-home" \
+  XDG_CONFIG_HOME="$TMP/installed-config" \
+  XDG_DATA_HOME="$TMP/xdg-data" \
+  PATH="$TMP/installed-child:/usr/bin:/bin" \
+  "$TMP/installed/bin/claude-janus" --help 2>&1
+)" || fail "installed launcher loads XDG shared libraries"
+[[ "$installed_output" == *'CHILD_RESOLVED:'* ]] ||
+  fail "installed launcher did not reach child resolution"
+pass "installed launcher XDG library fallback"
+
+calls_file="$TMP/validation.calls"
+: > "$calls_file"
+janus_config_init_paths() { JANUS_ROUTER_CONFIG="$TMP/router.conf"; }
+janus_config_load_router() {
+  assert_eq "$1" "$TMP/router.conf" "router path"
+  JANUS_BASE_URL='https://janus.test/v1/'
+  JANUS_API_KEY='test-key'
+}
+janus_config_is_placeholder() { return 1; }
+janus_config_run_first_setup() { fail "unexpected setup"; }
+janus_validate_service() {
+  printf 'called\n' >> "$calls_file"
+  assert_eq "$1" 'https://janus.test' "validated normalized URL"
+  assert_eq "$2" 'test-key' "validated API key"
+  printf '{"data":[{"id":"provider/model"}]}\n'
+}
+JANUS_BASE_URL= JANUS_API_KEY= JANUS_CATALOG_JSON=
+janus_load_validated_service || fail "load validated service"
+assert_eq "$(wc -l < "$calls_file")" 1 "validation call count"
+assert_eq "$JANUS_BASE_URL" 'https://janus.test' "caller base URL"
+assert_eq "$JANUS_API_KEY" 'test-key' "caller API key"
+assert_eq "$JANUS_CATALOG_JSON" '{"data":[{"id":"provider/model"}]}' "caller catalog"
+pass "validated service remains in caller shell"
+
+for case in \
+  '1|Janus health check failed.|1' \
+  '2|Janus model catalog request failed.|2' \
+  '3|Janus model catalog response was malformed.|3' \
+  '4|Janus model catalog is empty.|4'
+do
+  IFS='|' read -r service_status expected_message expected_status <<<"$case"
+  janus_validate_service() { return "$service_status"; }
+  set +e
+  janus_load_validated_service >"$TMP/service-$service_status.out" 2>"$TMP/service-$service_status.err"
+  rc=$?
+  set -e
+  assert_eq "$rc" "$expected_status" "service category status $service_status"
+  assert_eq "$(<"$TMP/service-$service_status.err")" "Janus Launcher: $expected_message" \
+    "service category diagnostic $service_status"
+  ! grep -Fq 'test-key' "$TMP/service-$service_status.err" || fail "service diagnostic leaked API key"
+done
+pass "validated service actionable status diagnostics"
+
+janus_require_command definitely-not-a-real-command 'Example dependency' 2>"$TMP/require.err" && \
+  fail "missing dependency accepted"
+grep -Fq 'Example dependency' "$TMP/require.err" || fail "dependency label omitted"
+pass "dependency diagnostics"
+
+printf 'All janus_runtime unit tests passed.\n'

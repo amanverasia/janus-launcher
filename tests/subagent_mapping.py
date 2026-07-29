@@ -12,7 +12,14 @@ from pathlib import Path
 root = Path(__file__).resolve().parents[1]
 tmp = Path(tempfile.mkdtemp(prefix="claude-janus-subagent-test-"))
 (tmp / "bin").mkdir()
-(tmp / "config").mkdir()
+(tmp / "config" / "janus-launcher").mkdir(parents=True)
+(tmp / "config" / "janus-launcher" / "claude-mappings.conf").write_text(
+    "OPUS_MODEL=openrouter/anthropic/claude-opus-4.8\n"
+    "SONNET_MODEL=deepseek/deepseek-v4-pro\n"
+    "HAIKU_MODEL=zhipu/glm-4.7\n"
+    "SUBAGENT_MODEL=deepseek/deepseek-v4-pro\n"
+    "DEFAULT_TIER=sonnet\n"
+)
 
 fake_claude = tmp / "bin" / "claude"
 fake_claude.write_text(
@@ -23,16 +30,21 @@ fake_claude.write_text(
 fake_claude.chmod(0o755)
 
 fake_curl = tmp / "bin" / "curl"
-fake_curl.write_text("#!/usr/bin/env bash\nexit 7\n")
+fake_curl.write_text(
+    "#!/usr/bin/env bash\n"
+    "for arg in \"$@\"; do\n"
+    "  [[ \"$arg\" == */v1/health ]] && exit 0\n"
+    "  [[ \"$arg\" == */v1/models ]] && printf '%s\\n' '{\"data\":[{\"id\":\"openrouter/anthropic/claude-opus-4.8\"},{\"id\":\"deepseek/deepseek-v4-pro\"},{\"id\":\"deepseek/deepseek-v4-flash\"},{\"id\":\"zhipu/glm-4.7\"}]}' && exit 0\n"
+    "done\nexit 7\n"
+)
 fake_curl.chmod(0o755)
 
 env = os.environ.copy()
 env.update(
     PATH=f"{tmp / 'bin'}:/usr/bin:/bin",
-    XDG_CONFIG_HOME=str(tmp / "config"),
-    JANUS_BASE_URL="https://router.example",
-    JANUS_API_KEY="test-key",
-    CLAUDE_JANUS_SKIP_CHECK="1",
+    JANUS_LAUNCHER_CONFIG_DIR=str(tmp / "config" / "janus-launcher"),
+    JANUS_LAUNCHER_BASE_URL="https://router.example",
+    JANUS_LAUNCHER_API_KEY="test-key",
     TERM="xterm-256color",
 )
 
@@ -105,7 +117,7 @@ for _ in range(20):
 
 raw = bytes(buffer)
 text = re.sub(rb"\x1b\[[0-9;?]*[ -/]*[@-~]", b"", raw).decode("utf-8", "replace")
-mappings = tmp / "config" / "claude-janus" / "mappings.conf"
+mappings = tmp / "config" / "janus-launcher" / "claude-mappings.conf"
 mapping_text = mappings.read_text() if mappings.exists() else ""
 checks = {
     "configuration action": "Change subagent mapping" in text,
