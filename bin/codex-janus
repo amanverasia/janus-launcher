@@ -299,8 +299,11 @@ if janus_is_top_level_passthrough "$@"; then
   exec "$CODEX_BIN" "$@"
 fi
 codex_parse_arguments "$@" || exit $?
-janus_load_validated_service || exit $?
+if [[ "${JANUS_LAUNCHER_DRY_RUN:-}" == 1 ]]; then
+  JANUS_UI_DISABLE=1
+fi
 janus_ui_init 'JANUS LAUNCHER · CODEX'
+janus_load_validated_service || exit $?
 if ((CODEX_HAS_CALLER_MODEL)); then
   if ! codex_validate_model "$JANUS_CATALOG_JSON" "$CODEX_CALLER_MODEL"; then
     printf 'codex-janus: requested model is not available in the Janus catalog: %s\n' "$CODEX_CALLER_MODEL" >&2
