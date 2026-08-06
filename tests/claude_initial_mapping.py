@@ -55,6 +55,8 @@ def wait_for(needle: bytes, timeout: float = 8) -> None:
         if ready:
             try:
                 chunk = os.read(fd, 65536)
+                if not chunk:
+                    break
                 raw.extend(chunk)
                 transcript.extend(chunk)
             except OSError:
@@ -86,6 +88,8 @@ while time.time() < deadline:
     if ready:
         try:
             chunk = os.read(fd, 65536)
+            if not chunk:
+                break
             raw.extend(chunk)
             transcript.extend(chunk)
         except OSError:
@@ -98,7 +102,10 @@ while True:
     if not ready:
         break
     try:
-        raw.extend(os.read(fd, 65536))
+        chunk = os.read(fd, 65536)
+        if not chunk:
+            break
+        raw.extend(chunk)
     except OSError:
         break
 

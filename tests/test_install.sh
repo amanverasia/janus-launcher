@@ -6,7 +6,12 @@ trap 'chmod -R u+w "$TMP" 2>/dev/null || true; rm -rf "$TMP"' EXIT
 
 fail() { printf 'FAIL %s\n' "$1" >&2; exit 1; }
 pass() { printf 'PASS %s\n' "$1"; }
-mode() { stat -c '%a' "$1"; }
+mode() {
+  case "$(uname -s)" in
+    Darwin) stat -f '%Lp' "$1" ;;
+    *) stat -c '%a' "$1" ;;
+  esac
+}
 assert_mode() { [[ "$(mode "$1")" == "$2" ]] || fail "$1 mode: expected $2, got $(mode "$1")"; }
 
 run_install() {
@@ -22,7 +27,7 @@ run_install() {
 fresh="$TMP/fresh"
 mkdir -p "$fresh/home"
 output="$(run_install "$fresh")"
-for command in janus-launcher claude-janus codex-janus; do
+for command in janus-launcher claude-janus codex-janus janus-control; do
   [[ -f "$fresh/commands/$command" ]] || fail "missing installed command $command"
   assert_mode "$fresh/commands/$command" 755
 done
@@ -32,7 +37,7 @@ for library in janus_api.sh janus_config.sh janus_runtime.sh janus_ui.sh; do
 done
 assert_mode "$fresh/config/janus-launcher" 700
 assert_mode "$fresh/config/janus-launcher/router.conf" 600
-[[ "$output" == *'Installed janus-launcher'* && "$output" == *'Installed claude-janus'* && "$output" == *'Installed codex-janus'* && "$output" == *'PATH'* ]] || fail 'new identity install output'
+[[ "$output" == *'Installed janus-launcher'* && "$output" == *'Installed claude-janus'* && "$output" == *'Installed codex-janus'* && "$output" == *'Installed janus-control'* && "$output" == *'PATH'* ]] || fail 'new identity install output'
 pass 'fresh layout, modes, and output'
 
 mkdir -p "$fresh/fake-clients"

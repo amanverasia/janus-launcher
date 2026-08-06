@@ -8,6 +8,12 @@ fail() { printf 'FAIL %s\n' "$1" >&2; exit 1; }
 assert_eq() {
   [[ "$1" == "$2" ]] || fail "$3: expected '$2', got '$1'"
 }
+mode() {
+  case "$(uname -s)" in
+    Darwin) stat -f '%Lp' "$1" ;;
+    *) stat -c '%a' "$1" ;;
+  esac
+}
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -123,8 +129,8 @@ mkdir -p "$TMP/write/private"
 chmod 755 "$TMP/write/private"
 janus_config_write_router "$TMP/write/private/router.conf" \
   'https://write.janus.test/v1/' 'write-secret'
-assert_eq "$(stat -c %a "$TMP/write/private")" '700' "router directory mode"
-assert_eq "$(stat -c %a "$TMP/write/private/router.conf")" '600' "router file mode"
+assert_eq "$(mode "$TMP/write/private")" '700' "router directory mode"
+assert_eq "$(mode "$TMP/write/private/router.conf")" '600' "router file mode"
 assert_eq "$(<"$TMP/write/private/router.conf")" \
   $'JANUS_BASE_URL=https://write.janus.test\nJANUS_API_KEY=write-secret' \
   "normalized router persistence"
@@ -137,7 +143,7 @@ printf 'stale router contents\n' > "$TMP/write/private/router.conf"
 chmod 644 "$TMP/write/private/router.conf"
 janus_config_write_router "$TMP/write/private/router.conf" \
   'https://replacement.janus.test/v1/' 'replacement-secret'
-assert_eq "$(stat -c %a "$TMP/write/private/router.conf")" '600' \
+assert_eq "$(mode "$TMP/write/private/router.conf")" '600' \
   "replacement router file mode"
 assert_eq "$(<"$TMP/write/private/router.conf")" \
   $'JANUS_BASE_URL=https://replacement.janus.test\nJANUS_API_KEY=replacement-secret' \

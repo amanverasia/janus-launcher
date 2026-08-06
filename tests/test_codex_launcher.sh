@@ -10,7 +10,14 @@ pass() { printf 'PASS %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1" >&2; exit 1; }
 assert_contains() { [[ "$1" == *"$2"* ]] || fail "$3 (missing: $2)"; }
 assert_not_contains() { [[ "$1" != *"$2"* ]] || fail "$3 (unexpected: $2)"; }
+assert_eq() { [[ "$1" == "$2" ]] || fail "$3: expected [$2], got [$1]"; }
 quote_arg() { printf '%q' "$1"; }
+mode() {
+  case "$(uname -s)" in
+    Darwin) stat -f '%Lp' "$1" ;;
+    *) stat -c '%a' "$1" ;;
+  esac
+}
 
 mkdir -p "$TMP/bin" "$TMP/config"
 cat > "$TMP/bin/codex" <<'SH'
@@ -21,7 +28,7 @@ for arg in "$@"; do
   printf 'ARG[%d]=%q\n' "$i" "$arg"
   ((i += 1))
 done
-if [[ -v JANUS_LAUNCHER_CODEX_API_KEY ]]; then
+if [[ "${JANUS_LAUNCHER_CODEX_API_KEY+set}" == set ]]; then
   printf 'KEY_SET=yes KEY_MATCH=%s\n' "$([[ "$JANUS_LAUNCHER_CODEX_API_KEY" == "$EXPECTED_CODEX_KEY" ]] && printf yes || printf no)"
 else
   printf 'KEY_SET=no KEY_MATCH=no\n'
@@ -215,7 +222,7 @@ source_codex() {
 state="$TMP/config/state.conf"
 roundtrip='provider/name.with:dash_under score=high=exact'
 source_codex codex_save_model "$state" "$roundtrip"
-[[ "$(stat -c '%a' "$state")" == 600 ]] || fail 'Codex state mode must be 600'
+[[ "$(mode "$state")" == 600 ]] || fail 'Codex state mode must be 600'
 [[ "$(<"$state")" == "MODEL=$roundtrip" ]] || fail 'Codex state must contain exactly one MODEL line'
 loaded="$(env CODEX_JANUS_SOURCE_ONLY=1 bash -c 'source "$1"; codex_load_model "$2"; printf "%s" "$CODEX_SAVED_MODEL"' _ "$WRAPPER" "$state")"
 [[ "$loaded" == "$roundtrip" ]] || fail "first-equals state round-trip: $(quote_arg "$loaded")"
@@ -262,10 +269,10 @@ pass 'caller precedence without state rewrite and catalog validation'
 for contents in missing 'OTHER=model-a' 'MODEL=stale/model'; do
   if [[ "$contents" == missing ]]; then rm -f "$TMP/config/codex.conf"; else printf '%s\n' "$contents" > "$TMP/config/codex.conf"; fi
   set +e
-  output="$(timeout 3 env "${BASE_ENV[@]}" JANUS_LAUNCHER_BASE_URL=https://janus.test "$WRAPPER" </dev/null 2>&1)"
+  output="$(env "${BASE_ENV[@]}" JANUS_LAUNCHER_BASE_URL=https://janus.test "$WRAPPER" </dev/null 2>&1)"
   rc=$?
   set -e
-  [[ $rc -ne 0 && $rc -ne 124 ]] || fail "noninteractive $contents state must fail without waiting for stdin"
+  [[ $rc -ne 0 ]] || fail "noninteractive $contents state must fail without waiting for stdin"
   assert_contains "$output" 'codex-janus --model MODEL' "noninteractive $contents corrective command"
 done
 pass 'noninteractive missing and stale state fail without stdin'
@@ -307,10 +314,8 @@ assert_contains "$out" 'ARG[0]=-c' 'exec --help takes provider flow'
 assert_contains "$out" 'ARG[10]=--model' 'exec --help gets selected model'
 assert_contains "$out" 'ARG[12]=exec' 'exec --help subcommand preserved'
 assert_contains "$out" 'ARG[13]=--help' 'exec --help option preserved'
-mapfile -t contacted < "$curl_log"
-[[ ${#contacted[@]} -eq 2 ]] || fail "Janus flow must contact exactly two endpoints: ${contacted[*]-}"
-[[ "${contacted[0]}" == 'https://janus.test/v1/health' ]] || fail "first endpoint must be health: ${contacted[0]}"
-[[ "${contacted[1]}" == 'https://janus.test/v1/models' ]] || fail "second endpoint must be models: ${contacted[1]}"
+assert_eq "$(<"$curl_log")" $'https://janus.test/v1/health\nhttps://janus.test/v1/models' \
+  'Janus flow must contact health then models exactly once'
 ! grep -q '/responses' "$curl_log" || fail 'launcher must not probe the Responses generation endpoint'
 pass 'full Janus flow ordering and non-generation probes'
 

@@ -51,14 +51,15 @@ Install locally with `./install.sh`. For dry launch construction use `JANUS_LAUN
 
 ## File boundaries
 
-- `bin/janus-launcher`: thin dispatcher only. Resolve sibling `claude-janus`/`codex-janus` first, then `PATH`; preserve argv with arrays/direct `exec`. It may source only the UI library for the no-argument picker and must never load configuration/API logic or contact Janus.
+- `bin/janus-launcher`: thin dispatcher only. Resolve sibling `claude-janus`/`codex-janus`/`janus-control` first, then `PATH`; preserve argv with arrays/direct `exec`. It may source only the UI library for the no-argument picker and must never load configuration/API logic or contact Janus.
 - `bin/claude-janus`: Claude mappings, tier selection, Claude child environment, and `exec` contract.
 - `bin/codex-janus`: one-model state, caller model parsing, owned provider overrides, TOML quoting, Codex child environment, and `exec` contract.
+- `bin/janus-control`: read-only Janus model catalog, status, and doctor operations. It must never invoke a generation endpoint, change client configuration, or print credentials.
 - `lib/janus_api.sh`: side-effect-free URL, catalog, health, and authenticated API functions.
 - `lib/janus_config.sh`: new configuration paths, strict router parsing, precedence, secure atomic persistence, and first-run setup.
 - `lib/janus_runtime.sh`: dependencies, executable resolution, top-level passthrough, and validated service orchestration.
 - `lib/janus_ui.sh`: terminal initialization, navigation, rendering, traps, and restoration.
-- `install.sh`: three executable and four library installation, explicit modes, new paths, strict preservation/validation of `router.conf`; it must not require either client executable.
+- `install.sh`: four executable and four library installation, explicit modes, new paths, strict preservation/validation of `router.conf`; it must not require either client executable.
 
 ## Process contracts
 

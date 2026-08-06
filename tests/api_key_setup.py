@@ -17,7 +17,7 @@ env.update(HOME=str(TMP / "home"), JANUS_LAUNCHER_CONFIG_DIR=str(TMP / "config")
 pid, fd = pty.fork()
 if pid == 0:
     os.execve(
-        "/usr/bin/bash",
+        "/bin/bash",
         [
             "bash",
             "-c",
@@ -39,13 +39,19 @@ deadline = time.time() + 5
 while b"Janus base URL" not in raw and time.time() < deadline:
     ready, _, _ = select.select([fd], [], [], 0.1)
     if ready:
-        raw.extend(os.read(fd, 65536))
+        chunk = os.read(fd, 65536)
+        if not chunk:
+            break
+        raw.extend(chunk)
 os.write(fd, b"https://router.example\n")
 deadline = time.time() + 5
 while b"Janus API key" not in raw and time.time() < deadline:
     ready, _, _ = select.select([fd], [], [], 0.1)
     if ready:
-        raw.extend(os.read(fd, 65536))
+        chunk = os.read(fd, 65536)
+        if not chunk:
+            break
+        raw.extend(chunk)
 os.write(fd, SECRET + b"\n")
 
 status = None
@@ -57,7 +63,10 @@ while time.time() < deadline:
     ready, _, _ = select.select([fd], [], [], 0.1)
     if ready:
         try:
-            raw.extend(os.read(fd, 65536))
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            raw.extend(chunk)
         except OSError:
             pass
 if status is None:
@@ -69,7 +78,10 @@ while True:
     if not ready:
         break
     try:
-        raw.extend(os.read(fd, 65536))
+        chunk = os.read(fd, 65536)
+        if not chunk:
+            break
+        raw.extend(chunk)
     except OSError:
         break
 

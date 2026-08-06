@@ -125,12 +125,12 @@ claude_validate_mappings() {
 claude_save_mappings() {
   local file="$1" temporary directory
   directory="$(dirname -- "$file")"
-  mkdir -p -- "$directory" && chmod 700 -- "$directory" || return 1
+  mkdir -p -- "$directory" && chmod 700 "$directory" || return 1
   temporary="$(mktemp "$directory/.claude-mappings.conf.XXXXXX")" || return 1
   if ! printf 'OPUS_MODEL=%s\nSONNET_MODEL=%s\nHAIKU_MODEL=%s\nSUBAGENT_MODEL=%s\nDEFAULT_TIER=%s\n' \
     "$OPUS_MODEL" "$SONNET_MODEL" "$HAIKU_MODEL" "$SUBAGENT_MODEL" "$DEFAULT_TIER" > "$temporary" ||
-    ! chmod 600 "$temporary" || ! mv -fT -- "$temporary" "$file"; then
-    rm -f -- "$temporary"
+    ! chmod 600 "$temporary" || ! mv -f "$temporary" "$file"; then
+    rm -f "$temporary"
     return 1
   fi
 }

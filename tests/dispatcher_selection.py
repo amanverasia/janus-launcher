@@ -45,7 +45,10 @@ def run_picker(keys: bytes) -> tuple[str, bytes, int, bool]:
         ready, _, _ = select.select([fd], [], [], 0.1)
         if ready:
             try:
-                raw.extend(os.read(fd, 65536))
+                data = os.read(fd, 65536)
+                if not data:
+                    break
+                raw.extend(data)
             except OSError:
                 break
     if b"Choose a client" in raw:
@@ -59,7 +62,9 @@ def run_picker(keys: bytes) -> tuple[str, bytes, int, bool]:
         ready, _, _ = select.select([fd], [], [], 0.1)
         if ready:
             try:
-                raw.extend(os.read(fd, 65536))
+                data = os.read(fd, 65536)
+                if data:
+                    raw.extend(data)
             except OSError:
                 pass
     if status is None:
@@ -70,7 +75,10 @@ def run_picker(keys: bytes) -> tuple[str, bytes, int, bool]:
         if not ready:
             break
         try:
-            raw.extend(os.read(fd, 65536))
+            data = os.read(fd, 65536)
+            if not data:
+                break
+            raw.extend(data)
         except OSError:
             break
     after = relevant_termios(termios.tcgetattr(fd))

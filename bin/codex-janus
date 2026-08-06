@@ -44,12 +44,12 @@ codex_save_model() {
   local file="$1" model="$2" directory temporary
   codex_valid_model_value "$model" || return 1
   directory="$(dirname -- "$file")"
-  mkdir -p -- "$directory" && chmod 700 -- "$directory" || return 1
+  mkdir -p -- "$directory" && chmod 700 "$directory" || return 1
   [[ ! -d "$file" ]] || return 1
   temporary="$(mktemp "$directory/.codex.conf.XXXXXX")" || return 1
-  if ! chmod 600 -- "$temporary" || ! printf 'MODEL=%s\n' "$model" > "$temporary" ||
-    ! mv -fT -- "$temporary" "$file" || [[ ! -f "$file" ]]; then
-    rm -f -- "$temporary"
+  if ! chmod 600 "$temporary" || ! printf 'MODEL=%s\n' "$model" > "$temporary" ||
+    ! mv -f "$temporary" "$file" || [[ ! -f "$file" ]]; then
+    rm -f "$temporary"
     return 1
   fi
 }
@@ -75,10 +75,13 @@ codex_render_model_picker() {
 codex_select_model() {
   local catalog="$1"
   local -a models=()
-  local selected
+  local selected model_ids
   jq -e 'all(.data[]; (.id | index("\n") == null) and (.id | index("\r") == null))' \
     >/dev/null 2>&1 <<<"$catalog" || return 1
-  mapfile -t models < <(janus_extract_model_ids "$catalog") || return
+  model_ids="$(janus_extract_model_ids "$catalog")" || return
+  while IFS= read -r selected; do
+    models+=("$selected")
+  done <<<"$model_ids"
   ((${#models[@]} > 0)) || return 1
   janus_ui_is_interactive || return 1
   janus_ui_navigate "${#models[@]}" 1 codex_render_model_picker '' "${models[@]}"

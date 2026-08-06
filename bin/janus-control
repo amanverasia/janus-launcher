@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+# janus-control — read-only Janus Router control-plane diagnostics.
+set -euo pipefail
+umask 077
+
+ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "$ROOT_DIR/lib/janus_api.sh" ]]; then
+  JANUS_LIB_DIR="$ROOT_DIR/lib"
+elif [[ -f "$SCRIPT_DIR/../lib/janus_api.sh" ]]; then
+  JANUS_LIB_DIR="$SCRIPT_DIR/../lib"
+else
+  JANUS_LIB_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/janus-launcher/lib"
+fi
+# shellcheck source=lib/janus_api.sh
+source "$JANUS_LIB_DIR/janus_api.sh"
+# shellcheck source=lib/janus_config.sh
+source "$JANUS_LIB_DIR/janus_config.sh"
+# shellcheck source=lib/janus_runtime.sh
+source "$JANUS_LIB_DIR/janus_runtime.sh"
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: janus-control {models|status|doctor}
+
+  models  Print exact model IDs from the authenticated Janus catalog.
+  status  Report Janus health and the available model count.
+  doctor  Check local dependencies, configuration, and Janus connectivity.
+EOF
+}
+
+load_service() {
+  janus_load_validated_service
+}
+
+print_models() {
+  janus_extract_model_ids "$JANUS_CATALOG_JSON"
+}
+
+run_models() {
+  load_service || return
+  print_models
+}
+
+run_status() {
+  local model_count
+  load_service || return
+  model_count="$(jq -r '.data | length' <<<"$JANUS_CATALOG_JSON")"
+  printf 'Janus endpoint: %s\n' "$JANUS_BASE_URL"
+  printf 'Service health: healthy\n'
+  printf 'Models: %s available\n' "$model_count"
+}
+
+doctor_fail() {
+  printf 'FAIL %s\n' "$1" >&2
+  return "${2:-1}"
+}
+
+run_doctor() {
+  local catalog model_count validation_status
+
+  if ! command -v curl >/dev/null 2>&1; then
+    doctor_fail 'curl is required for Janus connectivity checks.' 127
+    return
+  fi
+  printf 'PASS curl is available\n'
+  if ! command -v jq >/dev/null 2>&1; then
+    doctor_fail 'jq is required for Janus catalog validation.' 127
+    return
+  fi
+  printf 'PASS jq is available\n'
+
+  janus_config_init_paths
+  janus_config_load_router "$JANUS_ROUTER_CONFIG" || {
+    doctor_fail 'router configuration is invalid.' 2
+    return
+  }
+  if janus_config_is_placeholder "$JANUS_BASE_URL" "$JANUS_API_KEY"; then
+    doctor_fail "router configuration is missing; create $JANUS_ROUTER_CONFIG or set JANUS_LAUNCHER_BASE_URL and JANUS_LAUNCHER_API_KEY." 2
+    return
+  fi
+  JANUS_BASE_URL="$(janus_normalize_base_url "$JANUS_BASE_URL")"
+  printf 'PASS router configuration loaded\n'
+
+  if catalog="$(janus_validate_service "$JANUS_BASE_URL" "$JANUS_API_KEY")"; then
+    model_count="$(jq -r '.data | length' <<<"$catalog")"
+    printf 'PASS Janus health endpoint is reachable\n'
+    printf 'PASS authenticated catalog is valid (%s models)\n' "$model_count"
+  else
+    validation_status=$?
+    case "$validation_status" in
+      1) doctor_fail 'Janus health endpoint is unreachable.' 1 ;;
+      2) doctor_fail 'Janus model catalog request failed.' 2 ;;
+      3) doctor_fail 'Janus model catalog response is malformed.' 3 ;;
+      4) doctor_fail 'Janus model catalog is empty.' 4 ;;
+      127) doctor_fail 'a required dependency is unavailable.' 127 ;;
+      *) doctor_fail 'Janus validation failed.' "$validation_status" ;;
+    esac
+    return
+  fi
+
+  if command -v claude >/dev/null 2>&1; then
+    printf 'PASS Claude Code is available\n'
+  else
+    printf 'INFO Claude Code is not on PATH; claude-janus cannot launch yet\n'
+  fi
+  if command -v codex >/dev/null 2>&1; then
+    printf 'PASS Codex is available\n'
+  else
+    printf 'INFO Codex is not on PATH; codex-janus cannot launch yet\n'
+  fi
+}
+
+case "${1-}" in
+  models)
+    [[ $# -eq 1 ]] || { usage; exit 2; }
+    run_models
+    ;;
+  status)
+    [[ $# -eq 1 ]] || { usage; exit 2; }
+    run_status
+    ;;
+  doctor)
+    [[ $# -eq 1 ]] || { usage; exit 2; }
+    run_doctor
+    ;;
+  -h|--help|help)
+    usage
+    ;;
+  '')
+    usage
+    exit 2
+    ;;
+  *)
+    printf 'janus-control: unknown command: %s\n' "$1" >&2
+    usage
+    exit 2
+    ;;
+esac

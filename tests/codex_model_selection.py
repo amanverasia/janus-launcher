@@ -28,7 +28,7 @@ CATALOG = '{"data":[{"id":"openrouter/anthropic/claude-sonnet-4"},{"id":"deepsee
 (BIN / "codex").write_text(
     "#!/usr/bin/env bash\n"
     "i=0; for arg in \"$@\"; do printf 'ARG[%d]=%q\\n' \"$i\" \"$arg\"; ((i += 1)); done\n"
-    "if [[ -v JANUS_LAUNCHER_CODEX_API_KEY ]]; then printf 'KEY_SET=yes\\n'; else printf 'KEY_SET=no\\n'; fi\n"
+    "if [[ \"${JANUS_LAUNCHER_CODEX_API_KEY+set}\" == set ]]; then printf 'KEY_SET=yes\\n'; else printf 'KEY_SET=no\\n'; fi\n"
 )
 (BIN / "codex").chmod(0o755)
 
@@ -57,7 +57,10 @@ def run_picker(stale: bool) -> tuple[str, str, int]:
         ready, _, _ = select.select([fd], [], [], 0.1)
         if ready:
             try:
-                raw.extend(os.read(fd, 65536))
+                data = os.read(fd, 65536)
+                if not data:
+                    break
+                raw.extend(data)
             except OSError:
                 break
     if b"Select a Codex model" in raw:
@@ -73,7 +76,9 @@ def run_picker(stale: bool) -> tuple[str, str, int]:
         ready, _, _ = select.select([fd], [], [], 0.1)
         if ready:
             try:
-                raw.extend(os.read(fd, 65536))
+                data = os.read(fd, 65536)
+                if data:
+                    raw.extend(data)
             except OSError:
                 pass
     if status is None:
@@ -84,7 +89,10 @@ def run_picker(stale: bool) -> tuple[str, str, int]:
         if not ready:
             break
         try:
-            raw.extend(os.read(fd, 65536))
+            data = os.read(fd, 65536)
+            if not data:
+                break
+            raw.extend(data)
         except OSError:
             break
     text = re.sub(rb"\x1b\[[0-9;?]*[ -/]*[@-~]", b"", bytes(raw)).decode("utf-8", "replace")

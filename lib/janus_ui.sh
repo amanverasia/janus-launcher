@@ -88,7 +88,7 @@ janus_ui_tty_restore() {
 }
 
 janus_ui_read_key() {
-  local key='' suffix=''
+  local key='' suffix='' timeout='0.12'
   JANUS_UI_KEY=''
   if ! IFS= read -rsn1 key; then
     JANUS_UI_KEY='esc'
@@ -97,7 +97,10 @@ janus_ui_read_key() {
   case "$key" in
     '') JANUS_UI_KEY='enter' ;;
     $'\033')
-      IFS= read -rsn2 -t 0.12 suffix || true
+      # Bash 3 accepts only integral read timeouts. Bash 4+ keeps the short
+      # timeout that makes a literal Escape key feel immediate.
+      ((BASH_VERSINFO[0] >= 4)) || timeout=1
+      IFS= read -rsn2 -t "$timeout" suffix || true
       case "$suffix" in
         '[A'|'OA') JANUS_UI_KEY='up' ;;
         '[B'|'OB') JANUS_UI_KEY='down' ;;
@@ -150,7 +153,7 @@ janus_ui_navigate() {
         printf '\a' >&2
         ;;
       *)
-        pressed="${JANUS_UI_KEY,,}"
+        pressed="$(printf '%s' "$JANUS_UI_KEY" | tr '[:upper:]' '[:lower:]')"
         for ((i=0; i<${#shortcuts}; i++)); do
           if [[ "$pressed" == "${shortcuts:i:1}" ]]; then
             JANUS_UI_RESULT="$((i + 1))"

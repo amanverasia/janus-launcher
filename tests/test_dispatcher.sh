@@ -25,8 +25,10 @@ EOF
 }
 make_fake "$TMP/sibling/claude-janus" sibling-claude
 make_fake "$TMP/sibling/codex-janus" sibling-codex
+make_fake "$TMP/sibling/janus-control" sibling-control
 make_fake "$TMP/path-bin/claude-janus" path-claude
 make_fake "$TMP/path-bin/codex-janus" path-codex
+make_fake "$TMP/path-bin/janus-control" path-control
 
 [[ -x "$DISPATCHER" ]] || fail 'dispatcher executable is missing'
 cp "$DISPATCHER" "$TMP/sibling/janus-launcher"
@@ -40,6 +42,10 @@ rm "$TMP/sibling/codex-janus"
 output="$(PATH="$TMP/path-bin:/usr/bin:/bin" "$TMP/sibling/janus-launcher" codex exec 'a b')"
 assert_eq "$output" $'CLIENT=path-codex\nARGC=2\nARG[0]=<exec>\nARG[1]=<a b>' 'PATH Codex delegation'
 pass 'installed PATH fallback preserves argv'
+
+output="$(PATH="$TMP/path-bin:/usr/bin:/bin" "$TMP/sibling/janus-launcher" doctor)"
+assert_eq "$output" $'CLIENT=sibling-control\nARGC=1\nARG[0]=<doctor>' 'sibling control delegation'
+pass 'control commands delegate without dispatcher configuration'
 
 set +e
 FAKE_STATUS=37 PATH="$TMP/path-bin:/usr/bin:/bin" "$TMP/sibling/janus-launcher" claude >/dev/null
@@ -58,7 +64,7 @@ pass 'unknown client prints error and usage'
 set +e
 output="$(PATH="$TMP/path-bin:/usr/bin:/bin" "$TMP/sibling/janus-launcher" </dev/null 2>&1)"; status=$?
 set -e
-[[ $status -ne 0 && "$output" == 'Usage: janus-launcher {claude|codex} [arguments...]' ]] || fail 'noninteractive no-client usage'
+[[ $status -ne 0 && "$output" == $'Usage: janus-launcher {claude|codex} [arguments...]\n       janus-launcher {models|status|doctor}' ]] || fail 'noninteractive no-client usage'
 pass 'noninteractive no-client fails with usage'
 
 rm -f "$TMP/sibling/claude-janus" "$TMP/path-bin/claude-janus"

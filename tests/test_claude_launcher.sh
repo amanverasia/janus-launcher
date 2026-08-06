@@ -10,6 +10,12 @@ pass() { printf 'PASS %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1" >&2; exit 1; }
 assert_contains() { [[ "$1" == *"$2"* ]] || fail "$3 (missing: $2)"; }
 assert_not_contains() { [[ "$1" != *"$2"* ]] || fail "$3 (unexpected: $2)"; }
+mode() {
+  case "$(uname -s)" in
+    Darwin) stat -f '%Lp' "$1" ;;
+    *) stat -c '%a' "$1" ;;
+  esac
+}
 
 mkdir -p "$TMP/bin" "$TMP/config/janus-launcher"
 cat > "$TMP/bin/claude" <<'SH'
@@ -65,7 +71,7 @@ EOF
 }
 run_launcher() { env "${BASE_ENV[@]}" "$WRAPPER" "$@" 2>&1; }
 write_valid
-[[ "$(stat -c %a "$CONFIG_DIR/claude-mappings.conf")" == 600 ]] || fail 'mapping file permissions'
+[[ "$(mode "$CONFIG_DIR/claude-mappings.conf")" == 600 ]] || fail 'mapping file permissions'
 
 out="$(run_launcher -p hello)"
 assert_contains "$out" 'ARG[4]=--model sonnet -p hello' 'default tier arguments'

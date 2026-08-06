@@ -74,7 +74,7 @@ janus_validate_service() {
 }
 JANUS_BASE_URL= JANUS_API_KEY= JANUS_CATALOG_JSON=
 janus_load_validated_service || fail "load validated service"
-assert_eq "$(wc -l < "$calls_file")" 1 "validation call count"
+assert_eq "$(wc -l < "$calls_file" | tr -d '[:space:]')" 1 "validation call count"
 assert_eq "$JANUS_BASE_URL" 'https://janus.test' "caller base URL"
 assert_eq "$JANUS_API_KEY" 'test-key' "caller API key"
 assert_eq "$JANUS_CATALOG_JSON" '{"data":[{"id":"provider/model"}]}' "caller catalog"

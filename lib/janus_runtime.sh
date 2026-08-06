@@ -25,17 +25,25 @@ janus_resolve_client_executable() {
   local name="$1" wrapper_path="$2" path_entry candidate
   local wrapper_real candidate_real
 
-  wrapper_real="$(readlink -f -- "$wrapper_path" 2>/dev/null || printf '%s' "$wrapper_path")"
+  wrapper_real="$(janus_realpath "$wrapper_path")"
   while IFS= read -r path_entry; do
     [[ -n "$path_entry" ]] || path_entry='.'
     candidate="$path_entry/$name"
     [[ -x "$candidate" && ! -d "$candidate" ]] || continue
-    candidate_real="$(readlink -f -- "$candidate" 2>/dev/null || printf '%s' "$candidate")"
+    candidate_real="$(janus_realpath "$candidate")"
     [[ "$candidate_real" == "$wrapper_real" ]] && continue
     printf '%s\n' "$candidate"
     return 0
   done < <(printf '%s' "${PATH:-}" | tr ':' '\n')
   return 127
+}
+
+janus_realpath() {
+  local path="$1"
+  if command -v realpath >/dev/null 2>&1; then
+    realpath "$path" 2>/dev/null && return 0
+  fi
+  readlink -f "$path" 2>/dev/null || printf '%s\n' "$path"
 }
 
 janus_is_top_level_passthrough() {

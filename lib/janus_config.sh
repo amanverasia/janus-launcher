@@ -76,7 +76,7 @@ janus_config_write_router() {
   directory="$(dirname -- "$file")"
   base_url="$(janus_normalize_base_url "$base_url")"
 
-  if ! mkdir -p -- "$directory" || ! chmod 700 -- "$directory"; then
+  if ! mkdir -p -- "$directory" || ! chmod 700 "$directory"; then
     printf 'Janus Launcher: cannot secure configuration directory: %s\n' "$directory" >&2
     return 1
   fi
@@ -88,11 +88,11 @@ janus_config_write_router() {
     printf 'Janus Launcher: cannot create router configuration in %s.\n' "$directory" >&2
     return 1
   }
-  if ! chmod 600 -- "$temporary" ||
+  if ! chmod 600 "$temporary" ||
     ! printf 'JANUS_BASE_URL=%s\nJANUS_API_KEY=%s\n' "$base_url" "$api_key" > "$temporary" ||
-    ! mv -fT -- "$temporary" "$file" ||
+    ! mv -f "$temporary" "$file" ||
     [[ ! -f "$file" ]]; then
-    rm -f -- "$temporary"
+    rm -f "$temporary"
     printf 'Janus Launcher: cannot write router configuration: %s\n' "$file" >&2
     return 1
   fi

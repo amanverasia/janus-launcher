@@ -72,6 +72,23 @@ def wait_for(needle: bytes, timeout: float = 8) -> None:
     raise RuntimeError(f"did not see {needle!r}")
 
 
+def wait_for_after(needle: bytes, offset: int, timeout: float = 8) -> None:
+    end = time.time() + timeout
+    while time.time() < end:
+        if needle in buffer[offset:]:
+            return
+        ready, _, _ = select.select([fd], [], [], 0.1)
+        if ready:
+            try:
+                data = os.read(fd, 65536)
+            except OSError:
+                data = b""
+            if not data:
+                break
+            buffer.extend(data)
+    raise RuntimeError(f"did not see a new {needle!r}")
+
+
 def press(key: bytes, pause: float = 0.15) -> None:
     os.write(fd, key)
     time.sleep(pause)
@@ -86,22 +103,25 @@ press(b"f")
 wait_for(b"Mapping saved")
 press(b" ")
 wait_for(b"Change subagent mapping")
+before_exit = len(buffer)
 press(b"\x1b")
-wait_for(b"Esc/Q cancel")
+wait_for_after(b"START SESSION", before_exit)
 press(b"\r")
 
 end = time.time() + 8
 status = None
 while time.time() < end:
-    got, status = os.waitpid(pid, os.WNOHANG)
-    if got:
-        break
     ready, _, _ = select.select([fd], [], [], 0.1)
     if ready:
         try:
-            buffer.extend(os.read(fd, 65536))
+            data = os.read(fd, 65536)
+            if data:
+                buffer.extend(data)
         except OSError:
             pass
+    got, status = os.waitpid(pid, os.WNOHANG)
+    if got:
+        break
 if status is None:
     os.kill(pid, 9)
     _, status = os.waitpid(pid, 0)

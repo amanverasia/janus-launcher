@@ -123,13 +123,17 @@ assert_eq "$validation_output" '{"object":"list","data":[{"id":"provider/model"}
 assert_eq "$(grep -cFx 'https://janus.test/v1/models' "$CURL_LOG")" '1' \
   "models endpoint call count"
 assert_eq "$(grep -cFx -- '--' "$CURL_LOG")" '2' "curl URL delimiter count"
-mapfile -t curl_log_lines < "$CURL_LOG"
-for i in "${!curl_log_lines[@]}"; do
-  if [[ "${curl_log_lines[i]}" == -- ]]; then
-    [[ "${curl_log_lines[i + 1]-}" == https://janus.test/v1/* ]] ||
+expect_url=0
+while IFS= read -r curl_log_line; do
+  if [[ $expect_url -eq 1 ]]; then
+    [[ "$curl_log_line" == https://janus.test/v1/* ]] ||
       fail "curl -- must immediately precede URL"
+    expect_url=0
+  elif [[ "$curl_log_line" == -- ]]; then
+    expect_url=1
   fi
-done
+done < "$CURL_LOG"
+[[ $expect_url -eq 0 ]] || fail "curl -- must immediately precede URL"
 grep -qFx 'Authorization: Bearer test-key' "$CURL_LOG" \
   || fail "catalog request authorization"
 grep -qE '^janus-launcher/' "$CURL_LOG" || fail "Janus Launcher user agent"

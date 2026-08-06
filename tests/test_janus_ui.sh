@@ -19,10 +19,11 @@ header="$(janus_ui_header 'Test title' 'Test subtitle' 2>&1)"
 [[ "$header" == *'CLAUDE CODE · OFFICIAL JANUS COMPANION'* && "$header" == *'Test title'* && "$header" == *'Test subtitle'* ]] ||
   fail "text header missing content"
 [[ "$header" != *$'\033['* ]] || fail "text header emitted escapes"
-mapfile -t header_lines <<< "$header"
-assert_eq "${#header_lines[0]}" "${#header_lines[${#header_lines[@]} - 1]}" \
+header_first="${header%%$'\n'*}"
+header_last="${header##*$'\n'}"
+assert_eq "${#header_first}" "${#header_last}" \
   "header border alignment"
-assert_eq "${#header_lines[0]}" 68 "Claude header width"
+assert_eq "${#header_first}" 68 "Claude header width"
 pass "noninteractive text-only UI"
 
 janus_ui_read_key < <(printf '\n')

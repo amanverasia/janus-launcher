@@ -4,6 +4,7 @@ set -euo pipefail
 
 usage() {
   printf 'Usage: janus-launcher {claude|codex} [arguments...]\n' >&2
+  printf '       janus-launcher {models|status|doctor}\n' >&2
 }
 
 resolve_launcher() {
@@ -23,6 +24,10 @@ delegate() {
   case "$client" in
     claude) command_name='claude-janus' ;;
     codex) command_name='codex-janus' ;;
+    models|status|doctor)
+      command_name='janus-control'
+      set -- "$client" "$@"
+      ;;
     *)
       printf 'Unknown client: %s\n' "$client" >&2
       usage

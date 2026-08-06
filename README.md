@@ -29,6 +29,7 @@ The installer creates these commands in `${JANUS_LAUNCHER_INSTALL_DIR:-$HOME/.lo
 janus-launcher
 claude-janus
 codex-janus
+janus-control
 ```
 
 Shared libraries are installed under `${XDG_DATA_HOME:-$HOME/.local/share}/janus-launcher/lib`. Ensure the command directory is on `PATH`.
@@ -55,6 +56,24 @@ Running `janus-launcher` without arguments opens an interactive client picker. I
 janus-launcher claude -p "Explain this repository"
 janus-launcher codex exec "Review these changes"
 ```
+
+Janus-compatible control-plane commands are also available. They carry over the
+safe operational workflow of Codex Router while keeping all provider routing in
+Janus: they only call Janus's health and catalog endpoints, never modify Codex
+configuration or send inference requests.
+
+```bash
+janus-launcher models       # exact model IDs from Janus
+janus-launcher status       # endpoint health and catalog size
+janus-launcher doctor       # dependencies, configuration, and connectivity
+
+# The control command may also be invoked directly.
+janus-control doctor
+```
+
+`doctor` does not prompt or write configuration. It reports a missing or
+placeholder router configuration with the exact corrective path, and it never
+prints the API key.
 
 Top-level client information commands (`-h`, `--help`, `-V`, `--version`, and `help`) bypass Janus setup and model selection. Other arguments retain the launcher's normal validation and routing behavior.
 
