@@ -33,9 +33,11 @@ CATALOG = '{"data":[{"id":"openrouter/anthropic/claude-sonnet-4"},{"id":"deepsee
 (BIN / "codex").chmod(0o755)
 
 
-def run_picker(stale: bool) -> tuple[str, str, int]:
+def run_picker(stale: bool, force_app: bool = False, query: bytes = b"") -> tuple[str, str, int]:
     state = CONFIG / "codex.conf"
-    if stale:
+    if force_app:
+        state.write_text("MODEL=openrouter/anthropic/claude-sonnet-4\n")
+    elif stale:
         state.write_text("MODEL=retired/stale-model\n")
     elif state.exists():
         state.unlink()
@@ -50,7 +52,8 @@ def run_picker(stale: bool) -> tuple[str, str, int]:
     )
     pid, fd = pty.fork()
     if pid == 0:
-        os.execve(str(ROOT / "bin" / "codex-janus"), ["codex-janus", "exec", "prompt"], env)
+        args = ["codex-janus", "--select-model", "app", "."] if force_app else ["codex-janus", "exec", "prompt"]
+        os.execve(str(ROOT / "bin" / "codex-janus"), args, env)
     raw = bytearray()
     deadline = time.time() + 8
     while b"Find a Codex model" not in raw and time.time() < deadline:
@@ -64,7 +67,7 @@ def run_picker(stale: bool) -> tuple[str, str, int]:
             except OSError:
                 break
     if b"Find a Codex model" in raw:
-        os.write(fd, b"\r")
+        os.write(fd, query + b"\r")
         deadline = time.time() + 8
         while b"Select a Codex model" not in raw and time.time() < deadline:
             ready, _, _ = select.select([fd], [], [], 0.1)
@@ -77,8 +80,9 @@ def run_picker(stale: bool) -> tuple[str, str, int]:
                 except OSError:
                     break
     if b"Select a Codex model" in raw:
-        os.write(fd, b"\x1b[B")
-        time.sleep(0.12)
+        if not query:
+            os.write(fd, b"\x1b[B")
+            time.sleep(0.12)
         os.write(fd, b"\r")
     status = None
     deadline = time.time() + 8
@@ -113,14 +117,20 @@ def run_picker(stale: bool) -> tuple[str, str, int]:
 
 
 all_ok = True
-for label, stale in (("initial", False), ("stale recovery", True)):
-    output, config_text, exit_code = run_picker(stale)
+for label, stale, force_app, query in (
+    ("initial browse", False, False, b""),
+    ("stale numeric", True, False, b"2"),
+    ("forced app search", False, True, b"deepseek"),
+):
+    output, config_text, exit_code = run_picker(stale, force_app, query)
     checks = {
         "model persisted": config_text == "MODEL=deepseek/deepseek-v4-pro\n",
         "model launched": "ARG[11]=deepseek/deepseek-v4-pro" in output,
         "secret hidden": API_KEY not in output,
         "terminal clean": "\x1b[A" not in output and "\x1b[B" not in output and "^[[" not in output,
         "key present": "KEY_SET=yes" in output,
+        "launcher option removed": "--select-model" not in output,
+        "app arguments preserved": not force_app or ("ARG[12]=app" in output and "ARG[13]=." in output),
         "success": exit_code == 0,
     }
     for name, ok in checks.items():

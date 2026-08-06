@@ -29,7 +29,7 @@ for command in janus-launcher claude-janus codex-janus janus-control; do
   install -m 0755 "$ROOT_DIR/bin/$command" "$INSTALL_DIR/$command" ||
     fail "cannot install command: $INSTALL_DIR/$command"
 done
-for library in janus_api.sh janus_config.sh janus_runtime.sh janus_ui.sh; do
+for library in janus_api.sh janus_config.sh janus_runtime.sh janus_ui.sh janus_codex_app.sh janus_codex_router.sh; do
   install -m 0644 "$ROOT_DIR/lib/$library" "$LIB_DIR/$library" ||
     fail "cannot install library: $LIB_DIR/$library"
 done

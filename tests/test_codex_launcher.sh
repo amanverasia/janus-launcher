@@ -214,6 +214,38 @@ parsed="$(env CODEX_JANUS_SOURCE_ONLY=1 bash -c '
 [[ "$parsed" == 'MODEL=model-a HAS=1 COUNT=6 CFG=-mconfig ATTACHED=-c=-mattached' ]] || fail "config values must not be parsed as models: $parsed"
 pass 'model parser skips configuration values'
 
+CODEX_JANUS_SOURCE_ONLY=1 source "$WRAPPER"
+codex_parse_arguments app --select-model '/tmp/project with spaces'
+[[ $CODEX_FORCE_MODEL_PICKER -eq 1 ]] || fail '--select-model did not force picker'
+[[ ${#CODEX_USER_ARGS[@]} -eq 2 ]] || fail '--select-model was not removed from child arguments'
+assert_eq "${CODEX_USER_ARGS[0]}" app 'app subcommand preserved after picker option'
+assert_eq "${CODEX_USER_ARGS[1]}" '/tmp/project with spaces' 'app path preserved after picker option'
+set +e
+picker_model_error="$(codex_parse_arguments --select-model --model model-a 2>&1)"
+picker_model_rc=$?
+set -e
+[[ $picker_model_rc -eq 2 ]] || fail '--select-model plus --model must return 2'
+assert_contains "$picker_model_error" 'cannot be combined' 'ambiguous picker/model diagnostic'
+pass 'forced picker option parsing and app argument preservation'
+
+# Bash 3.2 treats an expansion of an empty array under `set -u` differently
+# from newer Bash releases. Exercise the guarded no-user-arguments path with
+# the same strict shell settings as the launcher.
+empty_command="$(env CODEX_JANUS_SOURCE_ONLY=1 /bin/bash -u -c '
+  source "$1"
+  CODEX_PROVIDER_ARGS=(-c provider=true)
+  CODEX_HAS_CALLER_MODEL=0
+  CODEX_USER_ARGS=()
+  if ((${#CODEX_USER_ARGS[@]})); then
+    codex_build_command codex model-a "${CODEX_USER_ARGS[@]}"
+  else
+    codex_build_command codex model-a
+  fi
+  printf "COUNT=%d LAST=%s\n" "${#CODEX_COMMAND[@]}" "${CODEX_COMMAND[${#CODEX_COMMAND[@]} - 1]}"
+' _ "$WRAPPER")"
+assert_eq "$empty_command" 'COUNT=5 LAST=model-a' 'empty Bash 3 argument array construction'
+pass 'Bash 3 empty user argument array is safe'
+
 parsed="$(env CODEX_JANUS_SOURCE_ONLY=1 bash -c '
   source "$1"
   codex_parse_arguments exec -- --model owned-looking -c model_provider=other --config model_providers.janus.base_url=other -m attached

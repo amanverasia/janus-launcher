@@ -31,7 +31,7 @@ for command in janus-launcher claude-janus codex-janus janus-control; do
   [[ -f "$fresh/commands/$command" ]] || fail "missing installed command $command"
   assert_mode "$fresh/commands/$command" 755
 done
-for library in janus_api.sh janus_config.sh janus_runtime.sh janus_ui.sh; do
+for library in janus_api.sh janus_config.sh janus_runtime.sh janus_ui.sh janus_codex_app.sh janus_codex_router.sh; do
   [[ -f "$fresh/data/janus-launcher/lib/$library" ]] || fail "missing installed library $library"
   assert_mode "$fresh/data/janus-launcher/lib/$library" 644
 done
@@ -62,6 +62,10 @@ output="$(env "${installed_env[@]}" "$fresh/commands/claude-janus" --version)"
 output="$(env "${installed_env[@]}" "$fresh/commands/codex-janus" --version)"
 [[ "$output" == $'CLIENT=codex\nARGC=1\nARG[0]=<--version>' ]] || fail 'installed Codex launcher did not reach fake client through installed layout'
 pass 'installed dedicated launchers load installed libraries and reach fake clients'
+
+output="$(env "${installed_env[@]}" "$fresh/commands/janus-control" codex-app status)"
+[[ "$output" == 'Codex app integration: disabled' ]] || fail 'installed control command did not load Codex app integration library'
+pass 'installed control command loads Codex app integration library'
 
 output="$(env "${installed_env[@]}" "$fresh/commands/janus-launcher" claude --version)"
 [[ "$output" == $'CLIENT=claude\nARGC=1\nARG[0]=<--version>' ]] || fail 'installed dispatcher did not delegate to sibling Claude launcher'

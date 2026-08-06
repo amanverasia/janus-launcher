@@ -18,14 +18,21 @@ source "$JANUS_LIB_DIR/janus_api.sh"
 source "$JANUS_LIB_DIR/janus_config.sh"
 # shellcheck source=lib/janus_runtime.sh
 source "$JANUS_LIB_DIR/janus_runtime.sh"
+# shellcheck source=lib/janus_codex_app.sh
+source "$JANUS_LIB_DIR/janus_codex_app.sh"
+# shellcheck source=lib/janus_codex_router.sh
+source "$JANUS_LIB_DIR/janus_codex_router.sh"
 
 usage() {
   cat >&2 <<'EOF'
-Usage: janus-control {models|status|doctor}
+Usage: janus-control {models|status|doctor|codex-app}
 
   models  Print exact model IDs from the authenticated Janus catalog.
   status  Report Janus health and the available model count.
   doctor  Check local dependencies, configuration, and Janus connectivity.
+  codex-app enable MODEL  Enable Janus-only mode in the Codex desktop app.
+  codex-app disable       Remove managed app integration and restore settings.
+  codex-app status        Show managed app integration status.
 EOF
 }
 
@@ -111,6 +118,63 @@ run_doctor() {
   fi
 }
 
+run_codex_token() {
+  local expected_url="$1" current_url
+  janus_config_init_paths
+  janus_config_load_router "$JANUS_ROUTER_CONFIG" || return
+  janus_config_is_placeholder "$JANUS_BASE_URL" "$JANUS_API_KEY" && return 2
+  current_url="$(janus_api_root "$JANUS_BASE_URL")"
+  [[ "$current_url" == "$expected_url" ]] || return 2
+  printf '%s\n' "$JANUS_API_KEY"
+}
+
+run_codex_app() {
+  local action="${1-}" model="${2-}" owner_status
+  case "$action" in
+    enable)
+      [[ -n "$model" && $# -eq 2 ]] || { usage; return 2; }
+      load_service || return
+      janus_codex_router_init_paths
+      if [[ -f "$JANUS_CODEX_APP_STATE" ]]; then
+        janus_codex_app_enable "$model" "$(janus_realpath "$SCRIPT_DIR/$(basename -- "${BASH_SOURCE[0]}")")"
+      elif janus_codex_router_owns_catalog; then
+        janus_codex_router_enable "$model"
+      else
+        owner_status=$?
+        [[ $owner_status -eq 1 ]] || return "$owner_status"
+        janus_codex_app_enable "$model" "$(janus_realpath "$SCRIPT_DIR/$(basename -- "${BASH_SOURCE[0]}")")"
+      fi
+      ;;
+    disable)
+      [[ $# -eq 1 ]] || { usage; return 2; }
+      janus_codex_router_init_paths
+      if [[ -f "$JANUS_CODEX_APP_STATE" ]]; then
+        janus_codex_app_disable
+      elif janus_codex_router_owns_catalog; then
+        janus_codex_router_disable
+      else
+        owner_status=$?
+        [[ $owner_status -eq 1 ]] || return "$owner_status"
+        janus_codex_app_disable
+      fi
+      ;;
+    status)
+      [[ $# -eq 1 ]] || { usage; return 2; }
+      janus_codex_router_init_paths
+      if [[ -f "$JANUS_CODEX_APP_STATE" ]]; then
+        janus_codex_app_status
+      elif janus_codex_router_owns_catalog; then
+        janus_codex_router_status
+      else
+        owner_status=$?
+        [[ $owner_status -eq 1 ]] || return "$owner_status"
+        janus_codex_app_status
+      fi
+      ;;
+    *) usage; return 2 ;;
+  esac
+}
+
 case "${1-}" in
   models)
     [[ $# -eq 1 ]] || { usage; exit 2; }
@@ -123,6 +187,14 @@ case "${1-}" in
   doctor)
     [[ $# -eq 1 ]] || { usage; exit 2; }
     run_doctor
+    ;;
+  codex-app)
+    shift
+    run_codex_app "$@"
+    ;;
+  codex-token)
+    [[ $# -eq 2 && -n "$2" ]] || exit 2
+    run_codex_token "$2"
     ;;
   -h|--help|help)
     usage

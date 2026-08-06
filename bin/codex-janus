@@ -299,8 +299,9 @@ codex_parse_arguments() {
   local argument i parsing_options=1
   CODEX_CALLER_MODEL=''
   CODEX_HAS_CALLER_MODEL=0
+  CODEX_FORCE_MODEL_PICKER=0
   CODEX_PASSTHROUGH_ONLY=0
-  CODEX_USER_ARGS=("$@")
+  CODEX_USER_ARGS=()
 
   if janus_is_top_level_passthrough "$@"; then
     CODEX_PASSTHROUGH_ONLY=1
@@ -309,6 +310,11 @@ codex_parse_arguments() {
 
   for ((i = 0; i < ${#arguments[@]}; i += 1)); do
     argument="${arguments[i]}"
+    if ((parsing_options)) && [[ "$argument" == --select-model ]]; then
+      CODEX_FORCE_MODEL_PICKER=1
+      continue
+    fi
+    CODEX_USER_ARGS+=("$argument")
     if ((parsing_options)) && [[ "$argument" == -- ]]; then
       parsing_options=0
       continue
@@ -317,6 +323,7 @@ codex_parse_arguments() {
     case "$argument" in
       -c|--config)
         ((i += 1))
+        CODEX_USER_ARGS+=("${arguments[i]}")
         continue
         ;;
       -c=*|--config=*) continue ;;
@@ -328,6 +335,7 @@ codex_parse_arguments() {
         CODEX_CALLER_MODEL="${arguments[i + 1]}"
         CODEX_HAS_CALLER_MODEL=1
         ((i += 1))
+        CODEX_USER_ARGS+=("${arguments[i]}")
         ;;
       --model=*)
         CODEX_CALLER_MODEL="${argument#--model=}"
@@ -343,6 +351,10 @@ codex_parse_arguments() {
         ;;
     esac
   done
+  if ((CODEX_FORCE_MODEL_PICKER && CODEX_HAS_CALLER_MODEL)); then
+    printf 'codex-janus: --select-model cannot be combined with -m or --model\n' >&2
+    return 2
+  fi
 }
 
 codex_build_provider_arguments() {
@@ -388,6 +400,20 @@ if ((CODEX_HAS_CALLER_MODEL)); then
     exit 2
   fi
   CODEX_EFFECTIVE_MODEL="$CODEX_CALLER_MODEL"
+elif ((CODEX_FORCE_MODEL_PICKER)); then
+  if ! janus_ui_is_interactive; then
+    printf 'codex-janus: --select-model requires an interactive terminal.\n' >&2
+    exit 2
+  fi
+  if ! codex_select_model "$JANUS_CATALOG_JSON"; then
+    printf 'codex-janus: model selection cancelled.\n' >&2
+    exit 2
+  fi
+  CODEX_EFFECTIVE_MODEL="$CODEX_SELECTED_MODEL"
+  codex_save_model "$JANUS_CODEX_CONFIG" "$CODEX_EFFECTIVE_MODEL" || {
+    printf 'codex-janus: cannot save Codex model selection: %s\n' "$JANUS_CODEX_CONFIG" >&2
+    exit 2
+  }
 elif codex_load_model "$JANUS_CODEX_CONFIG" &&
   codex_validate_model "$JANUS_CATALOG_JSON" "$CODEX_SAVED_MODEL"; then
   CODEX_EFFECTIVE_MODEL="$CODEX_SAVED_MODEL"
@@ -403,7 +429,11 @@ else
   exit 2
 fi
 codex_build_provider_arguments "$(janus_api_root "$JANUS_BASE_URL")"
-codex_build_command "$CODEX_BIN" "$CODEX_EFFECTIVE_MODEL" "$@" || exit $?
+if ((${#CODEX_USER_ARGS[@]})); then
+  codex_build_command "$CODEX_BIN" "$CODEX_EFFECTIVE_MODEL" "${CODEX_USER_ARGS[@]}" || exit $?
+else
+  codex_build_command "$CODEX_BIN" "$CODEX_EFFECTIVE_MODEL" || exit $?
+fi
 export JANUS_LAUNCHER_CODEX_API_KEY="$JANUS_API_KEY"
 if [[ "${JANUS_LAUNCHER_DRY_RUN:-}" == 1 ]]; then
   printf '[dry-run] would exec:'
