@@ -400,7 +400,7 @@ if ((CODEX_HAS_CALLER_MODEL)); then
     exit 2
   fi
   CODEX_EFFECTIVE_MODEL="$CODEX_CALLER_MODEL"
-elif ((CODEX_FORCE_MODEL_PICKER)); then
+elif ((CODEX_FORCE_MODEL_PICKER)) || janus_ui_is_interactive; then
   if ! janus_ui_is_interactive; then
     printf 'codex-janus: --select-model requires an interactive terminal.\n' >&2
     exit 2
@@ -417,12 +417,6 @@ elif ((CODEX_FORCE_MODEL_PICKER)); then
 elif codex_load_model "$JANUS_CODEX_CONFIG" &&
   codex_validate_model "$JANUS_CATALOG_JSON" "$CODEX_SAVED_MODEL"; then
   CODEX_EFFECTIVE_MODEL="$CODEX_SAVED_MODEL"
-elif janus_ui_is_interactive && codex_select_model "$JANUS_CATALOG_JSON"; then
-  CODEX_EFFECTIVE_MODEL="$CODEX_SELECTED_MODEL"
-  codex_save_model "$JANUS_CODEX_CONFIG" "$CODEX_EFFECTIVE_MODEL" || {
-    printf 'codex-janus: cannot save Codex model selection: %s\n' "$JANUS_CODEX_CONFIG" >&2
-    exit 2
-  }
 else
   printf 'codex-janus: no valid saved Codex model is available.\n' >&2
   printf 'Run codex-janus --model MODEL once with a model from the Janus catalog, or run codex-janus interactively to choose one.\n' >&2

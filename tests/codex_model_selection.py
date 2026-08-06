@@ -33,9 +33,11 @@ CATALOG = '{"data":[{"id":"openrouter/anthropic/claude-sonnet-4"},{"id":"deepsee
 (BIN / "codex").chmod(0o755)
 
 
-def run_picker(stale: bool, force_app: bool = False, query: bytes = b"") -> tuple[str, str, int]:
+def run_picker(stale: bool, force_app: bool = False, query: bytes = b"", valid_saved: bool = False) -> tuple[str, str, int]:
     state = CONFIG / "codex.conf"
     if force_app:
+        state.write_text("MODEL=openrouter/anthropic/claude-sonnet-4\n")
+    elif valid_saved:
         state.write_text("MODEL=openrouter/anthropic/claude-sonnet-4\n")
     elif stale:
         state.write_text("MODEL=retired/stale-model\n")
@@ -117,12 +119,13 @@ def run_picker(stale: bool, force_app: bool = False, query: bytes = b"") -> tupl
 
 
 all_ok = True
-for label, stale, force_app, query in (
-    ("initial browse", False, False, b""),
-    ("stale numeric", True, False, b"2"),
-    ("forced app search", False, True, b"deepseek"),
+for label, stale, force_app, query, valid_saved in (
+    ("initial browse", False, False, b"", False),
+    ("valid saved reselect", False, False, b"2", True),
+    ("stale numeric", True, False, b"2", False),
+    ("forced app search", False, True, b"deepseek", False),
 ):
-    output, config_text, exit_code = run_picker(stale, force_app, query)
+    output, config_text, exit_code = run_picker(stale, force_app, query, valid_saved)
     checks = {
         "model persisted": config_text == "MODEL=deepseek/deepseek-v4-pro\n",
         "model launched": "ARG[11]=deepseek/deepseek-v4-pro" in output,

@@ -140,14 +140,15 @@ configuration, the launcher automatically uses the compatible Codex binary
 bundled with the ChatGPT desktop app when available. Otherwise it prints an actionable
 configuration error instead of failing after model selection.
 
-On the first interactive CLI launch, choose a model from the Janus catalog. The
-choice is saved in `codex.conf` and reused on later launches:
+Every interactive CLI launch opens the searchable Janus model picker. The
+choice is saved in `codex.conf` as the noninteractive default:
 
 ```bash
 codex-janus
 ```
 
-To reopen the searchable picker and replace the saved CLI choice, run:
+`--select-model` explicitly requires that same picker, which is useful in
+scripts that allocate a terminal:
 
 ```bash
 codex-janus --select-model
@@ -161,9 +162,9 @@ codex-janus --model provider/model-id
 ```
 
 Caller `-m MODEL`, `--model MODEL`, and `--model=MODEL` selections take
-precedence for that invocation without rewriting saved state. A missing or stale
-saved model opens the catalog picker only on an interactive terminal;
-noninteractive use fails with corrective guidance.
+precedence for that invocation without rewriting saved state. Noninteractive
+launches reuse the valid saved model; if it is missing or stale, they fail with
+corrective guidance instead of prompting.
 
 Large catalogs open with a search prompt instead of printing every model. Type a
 provider or model fragment to filter, type an exact catalog number, or press
