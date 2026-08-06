@@ -146,6 +146,15 @@ assert_contains "$unavailable_out" 'codex features list' 'incompatible Codex cor
 assert_not_contains "$unavailable_out" "$SECRET" 'incompatible Codex error redacts secret'
 pass 'Codex configuration preflight and compatible fallback'
 
+out="$(env PATH="$TMP/missing-bin:/usr/bin:/bin" HOME="$TMP/missing-home" \
+  JANUS_LAUNCHER_CONFIG_DIR="$TMP/missing-config" \
+  JANUS_LAUNCHER_CODEX_FALLBACK_BIN="$TMP/bin/codex-fallback" \
+  "$WRAPPER" --help 2>&1)"
+assert_contains "$out" 'using compatible Codex binary' 'missing PATH binary uses fallback'
+assert_contains "$out" 'FALLBACK_LAUNCHED=yes' 'missing PATH binary launches fallback'
+assert_contains "$out" '<--help>' 'fallback preserves top-level passthrough'
+pass 'bundled fallback works without a PATH Codex binary'
+
 for item in \
   '-c|model_provider="other"' \
   '-c=model_provider="other"|' \
@@ -355,7 +364,9 @@ missing_path="$TMP/missing-bin"
 mkdir -p "$missing_path"
 set +e
 missing_out="$(env PATH="$missing_path:/usr/bin:/bin" HOME="$TMP/missing-home" \
-  JANUS_LAUNCHER_CONFIG_DIR="$TMP/missing-config" "$WRAPPER" --help 2>&1)"
+  JANUS_LAUNCHER_CONFIG_DIR="$TMP/missing-config" \
+  JANUS_LAUNCHER_CODEX_FALLBACK_BIN="$TMP/missing-fallback" \
+  "$WRAPPER" --help 2>&1)"
 missing_rc=$?
 set -e
 [[ $missing_rc -eq 127 ]] || fail "absent Codex must return 127, got $missing_rc"

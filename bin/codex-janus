@@ -26,15 +26,18 @@ codex_valid_model_value() {
 }
 
 codex_binary_loads_config() {
-  "$1" features list >/dev/null 2>&1
+  [[ -n "$1" && -x "$1" ]] && "$1" features list >/dev/null 2>&1
 }
 
 codex_select_compatible_binary() {
   local primary="$1"
   local fallback="${JANUS_LAUNCHER_CODEX_FALLBACK_BIN:-/Applications/ChatGPT.app/Contents/Resources/codex}"
 
-  CODEX_BIN="$primary"
-  codex_binary_loads_config "$CODEX_BIN" && return 0
+  CODEX_BIN=''
+  if codex_binary_loads_config "$primary"; then
+    CODEX_BIN="$primary"
+    return 0
+  fi
   if [[ "$fallback" != "$primary" && -x "$fallback" ]] &&
     codex_binary_loads_config "$fallback"; then
     CODEX_BIN="$fallback"
@@ -42,6 +45,10 @@ codex_select_compatible_binary() {
     return 0
   fi
 
+  if [[ -z "$primary" || ! -x "$primary" ]]; then
+    printf 'codex-janus: Codex binary not found on PATH or in the ChatGPT app.\n' >&2
+    return 127
+  fi
   printf 'codex-janus: Codex could not load its configuration with: %s\n' "$primary" >&2
   printf 'Run `codex features list` to see the configuration error, then update Codex or fix ~/.codex/config.toml.\n' >&2
   return 2
@@ -365,11 +372,10 @@ if [[ "${CODEX_JANUS_SOURCE_ONLY:-}" == 1 ]]; then
 fi
 
 CODEX_BIN="$(janus_resolve_client_executable codex "${BASH_SOURCE[0]}" || true)"
-[[ -x "$CODEX_BIN" ]] || { printf 'codex-janus: Codex binary not found\n' >&2; exit 127; }
+codex_select_compatible_binary "$CODEX_BIN" || exit $?
 if janus_is_top_level_passthrough "$@"; then
   exec "$CODEX_BIN" "$@"
 fi
-codex_select_compatible_binary "$CODEX_BIN" || exit $?
 codex_parse_arguments "$@" || exit $?
 if [[ "${JANUS_LAUNCHER_DRY_RUN:-}" == 1 ]]; then
   JANUS_UI_DISABLE=1
