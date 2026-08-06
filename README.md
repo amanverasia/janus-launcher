@@ -124,6 +124,13 @@ MODEL=provider/model-id
 
 The launcher passes temporary `-c` provider overrides to Codex with a normalized `<Janus base>/v1`, `wire_api="responses"`, and the API key delivered through `JANUS_LAUNCHER_CODEX_API_KEY`. It does not edit `~/.codex/config.toml`, create a profile, or make a generation probe. Therefore the Janus deployment must implement `POST /v1/responses`.
 
+Before contacting Janus, the launcher asks Codex to parse its existing
+configuration with the read-only `features list` command. On macOS, if the
+`codex` found on `PATH` is outdated or cannot parse the current configuration,
+the launcher automatically uses the compatible Codex binary bundled with the
+ChatGPT desktop app when available. Otherwise it prints an actionable
+configuration error instead of failing after model selection.
+
 Caller `-m MODEL`, `--model MODEL`, and `--model=MODEL` selections take precedence for that invocation without rewriting saved state. A missing or stale model opens the catalog picker only on an interactive terminal; noninteractive use fails with corrective guidance.
 
 Large catalogs open with a search prompt instead of printing every model. Type a

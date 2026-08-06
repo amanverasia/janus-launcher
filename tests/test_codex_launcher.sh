@@ -22,6 +22,9 @@ mode() {
 mkdir -p "$TMP/bin" "$TMP/config"
 cat > "$TMP/bin/codex" <<'SH'
 #!/usr/bin/env bash
+if [[ "${1-}" == features && "${2-}" == list ]]; then
+  exit "${CODEX_CONFIG_TEST_STATUS:-0}"
+fi
 printf 'COUNT=%d\n' "$#"
 i=0
 for arg in "$@"; do
@@ -114,6 +117,34 @@ for form in separated-long assigned-long separated-short attached-short; do
   assert_not_contains "$out" "$SECRET" "$form key absent from argv and output"
 done
 pass 'exact model forms and provider contract'
+
+cat > "$TMP/bin/codex-fallback" <<'SH'
+#!/usr/bin/env bash
+if [[ "${1-}" == features && "${2-}" == list ]]; then exit 0; fi
+printf 'FALLBACK_LAUNCHED=yes\n'
+printf 'FALLBACK_ARGS:'
+printf ' <%s>' "$@"
+printf '\n'
+SH
+chmod +x "$TMP/bin/codex-fallback"
+out="$(env "${BASE_ENV[@]}" JANUS_LAUNCHER_BASE_URL=https://janus.test \
+  CODEX_CONFIG_TEST_STATUS=1 JANUS_LAUNCHER_CODEX_FALLBACK_BIN="$TMP/bin/codex-fallback" \
+  "$WRAPPER" --model model-a 2>&1)"
+assert_contains "$out" 'using compatible Codex binary' 'incompatible primary diagnostic'
+assert_contains "$out" 'FALLBACK_LAUNCHED=yes' 'compatible fallback launch'
+assert_contains "$out" '<--model> <model-a>' 'fallback preserves caller model'
+assert_not_contains "$out" "$SECRET" 'fallback keeps secret redacted'
+
+set +e
+unavailable_out="$(env "${BASE_ENV[@]}" JANUS_LAUNCHER_BASE_URL=https://janus.test \
+  CODEX_CONFIG_TEST_STATUS=1 JANUS_LAUNCHER_CODEX_FALLBACK_BIN="$TMP/bin/missing-fallback" \
+  "$WRAPPER" --model model-a 2>&1)"
+unavailable_rc=$?
+set -e
+[[ $unavailable_rc -eq 2 ]] || fail "incompatible Codex status: $unavailable_rc"
+assert_contains "$unavailable_out" 'codex features list' 'incompatible Codex corrective command'
+assert_not_contains "$unavailable_out" "$SECRET" 'incompatible Codex error redacts secret'
+pass 'Codex configuration preflight and compatible fallback'
 
 for item in \
   '-c|model_provider="other"' \
