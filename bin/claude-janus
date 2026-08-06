@@ -399,7 +399,7 @@ render_mapping_model_menu() {
     print_model_option "$cursor" "$number" "${TIER_MENU_LABELS[$i]}" "${TIER_MENU_IDS[$i]}" "${TIER_MENU_NOTES[$i]}"
   done
   menu_choice "$cursor" "$TIER_MENU_CUSTOM_INDEX" "$TIER_MENU_CUSTOM_INDEX" 'Enter another exact Janus model ID'
-  printf '\n  %s↑/↓ move · Enter select · Esc back%s\n' "$DIM" "$RESET" >&2
+  printf '\n  %sType a number + Enter · ↑/↓ move · Esc back%s\n\n' "$DIM" "$RESET" >&2
 }
 
 configure_mapping() {
@@ -463,7 +463,7 @@ render_default_tier_menu() {
   menu_choice "$cursor" 1 1 "Opus    → $(model_label "$OPUS_MODEL")"
   menu_choice "$cursor" 2 2 "Sonnet  → $(model_label "$SONNET_MODEL")"
   menu_choice "$cursor" 3 3 "Haiku   → $(model_label "$HAIKU_MODEL")"
-  printf '\n  %s↑/↓ move · Enter select · Esc back · 1–3 shortcut%s\n' "$DIM" "$RESET" >&2
+  printf '\n  %sType a number + Enter · ↑/↓ move · Esc back%s\n\n' "$DIM" "$RESET" >&2
 }
 
 configure_default_tier() {
@@ -499,7 +499,7 @@ render_config_menu() {
   menu_choice "$cursor" 3 3 'Change Haiku mapping'
   menu_choice "$cursor" 4 4 'Change subagent mapping'
   menu_choice "$cursor" 5 5 'Change default startup tier'
-  printf '\n  %s↑/↓ move · Enter select · Esc back · 1–5 shortcut%s\n' "$DIM" "$RESET" >&2
+  printf '\n  %sType a number + Enter · ↑/↓ move · Esc back%s\n\n' "$DIM" "$RESET" >&2
 }
 
 configure_menu() {
@@ -566,7 +566,7 @@ render_startup_menu() {
   menu_choice "$cursor" 2 2 "Sonnet  → $(model_label "$SONNET_MODEL")"
   menu_choice "$cursor" 3 3 "Haiku   → $(model_label "$HAIKU_MODEL")"
   menu_choice "$cursor" 4 4 'Configure mappings'
-  printf '\n  %s↑/↓ move · Enter select · Esc/Q cancel · 1–4 shortcut%s\n' "$DIM" "$RESET" >&2
+  printf '\n  %sType a number + Enter · ↑/↓ move · Esc/Q cancel%s\n\n' "$DIM" "$RESET" >&2
 }
 
 # ---- Determine startup tier -------------------------------------------------

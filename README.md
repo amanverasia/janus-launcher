@@ -126,6 +126,11 @@ The launcher passes temporary `-c` provider overrides to Codex with a normalized
 
 Caller `-m MODEL`, `--model MODEL`, and `--model=MODEL` selections take precedence for that invocation without rewriting saved state. A missing or stale model opens the catalog picker only on an interactive terminal; noninteractive use fails with corrective guidance.
 
+Large catalogs open with a search prompt instead of printing every model. Type a
+provider or model fragment to filter, type an exact catalog number, or press
+Enter to browse 20 results at a time. Every interactive menu accepts a complete
+number followed by Enter; arrow keys remain available for nearby choices.
+
 The launchers reserve the temporary Janus provider keys they own but preserve unrelated Codex `-c` overrides and other client arguments.
 
 ## Automation and troubleshooting

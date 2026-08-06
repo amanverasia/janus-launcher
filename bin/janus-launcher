@@ -75,7 +75,7 @@ render_clients() {
   janus_ui_header 'Choose a client' 'Select the CLI to launch through Janus.'
   janus_ui_choice "$cursor" 1 c 'Claude Code'
   janus_ui_choice "$cursor" 2 x 'Codex'
-  printf '\n  %s↑/↓ move · Enter select · Esc/Q cancel%s\n' "$DIM" "$RESET" >&2
+  printf '\n  %sType a number + Enter · ↑/↓ move · Esc/Q cancel%s\n\n' "$DIM" "$RESET" >&2
 }
 
 janus_ui_init 'JANUS LAUNCHER'

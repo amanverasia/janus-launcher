@@ -117,22 +117,43 @@ janus_ui_read_key() {
 
 janus_ui_navigate() {
   local count="$1" cursor="$2" renderer="$3" shortcuts="$4"
-  local i pressed
+  local i pressed numeric_input=''
   shift 4
   JANUS_UI_RESULT=''
   JANUS_UI_REDRAW_IN_PLACE=0
   janus_ui_tty_raw
   while true; do
-    "$renderer" "$cursor" "$@"
+    if [[ -z "$numeric_input" ]]; then
+      "$renderer" "$cursor" "$@"
+      printf '  %sSelection%s: ' "$BOLD" "$RESET" >&2
+    fi
     janus_ui_read_key
     case "$JANUS_UI_KEY" in
-      up)   (( cursor = cursor <= 1 ? count : cursor - 1 )); JANUS_UI_REDRAW_IN_PLACE=1 ;;
-      down) (( cursor = cursor >= count ? 1 : cursor + 1 )); JANUS_UI_REDRAW_IN_PLACE=1 ;;
-      home) cursor=1; JANUS_UI_REDRAW_IN_PLACE=1 ;;
-      end)  cursor="$count"; JANUS_UI_REDRAW_IN_PLACE=1 ;;
+      up)
+        numeric_input=''
+        (( cursor = cursor <= 1 ? count : cursor - 1 ))
+        JANUS_UI_REDRAW_IN_PLACE=1
+        ;;
+      down)
+        numeric_input=''
+        (( cursor = cursor >= count ? 1 : cursor + 1 ))
+        JANUS_UI_REDRAW_IN_PLACE=1
+        ;;
+      home) numeric_input=''; cursor=1; JANUS_UI_REDRAW_IN_PLACE=1 ;;
+      end)  numeric_input=''; cursor="$count"; JANUS_UI_REDRAW_IN_PLACE=1 ;;
       left|right) ;;
       enter)
-        JANUS_UI_RESULT="$cursor"
+        if [[ -n "$numeric_input" ]]; then
+          if (( 10#$numeric_input < 1 || 10#$numeric_input > count )); then
+            numeric_input=''
+            JANUS_UI_REDRAW_IN_PLACE=1
+            printf '\a' >&2
+            continue
+          fi
+          JANUS_UI_RESULT="$((10#$numeric_input))"
+        else
+          JANUS_UI_RESULT="$cursor"
+        fi
         janus_ui_tty_restore
         JANUS_UI_REDRAW_IN_PLACE=0
         return 0
@@ -143,14 +164,19 @@ janus_ui_navigate() {
         JANUS_UI_REDRAW_IN_PLACE=0
         return 0
         ;;
-      [1-9])
-        if (( 10#$JANUS_UI_KEY <= count )); then
-          JANUS_UI_RESULT="$JANUS_UI_KEY"
-          janus_ui_tty_restore
-          JANUS_UI_REDRAW_IN_PLACE=0
-          return 0
+      [0-9])
+        if ((${#numeric_input} < ${#count})); then
+          numeric_input+="$JANUS_UI_KEY"
+          printf '%s' "$JANUS_UI_KEY" >&2
+        else
+          printf '\a' >&2
         fi
-        printf '\a' >&2
+        ;;
+      $'\177'|$'\b')
+        if [[ -n "$numeric_input" ]]; then
+          numeric_input="${numeric_input%?}"
+          printf '\b \b' >&2
+        fi
         ;;
       *)
         pressed="$(printf '%s' "$JANUS_UI_KEY" | tr '[:upper:]' '[:lower:]')"

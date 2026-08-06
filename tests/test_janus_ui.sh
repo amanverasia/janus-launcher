@@ -36,6 +36,11 @@ janus_ui_read_key < <(printf 'q')
 assert_eq "$JANUS_UI_KEY" q "literal key decoding"
 pass "key decoding"
 
+numeric_renderer() { :; }
+janus_ui_navigate 831 1 numeric_renderer '' < <(printf '815\n') 2>/dev/null
+assert_eq "$JANUS_UI_RESULT" 815 "multi-digit numeric selection"
+pass "multi-digit menu selection"
+
 JANUS_UI_TTY_ORIGINAL=original
 JANUS_UI_TTY_RAW=1
 stty_calls=0

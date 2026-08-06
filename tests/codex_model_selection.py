@@ -53,7 +53,7 @@ def run_picker(stale: bool) -> tuple[str, str, int]:
         os.execve(str(ROOT / "bin" / "codex-janus"), ["codex-janus", "exec", "prompt"], env)
     raw = bytearray()
     deadline = time.time() + 8
-    while b"Select a Codex model" not in raw and time.time() < deadline:
+    while b"Find a Codex model" not in raw and time.time() < deadline:
         ready, _, _ = select.select([fd], [], [], 0.1)
         if ready:
             try:
@@ -63,6 +63,19 @@ def run_picker(stale: bool) -> tuple[str, str, int]:
                 raw.extend(data)
             except OSError:
                 break
+    if b"Find a Codex model" in raw:
+        os.write(fd, b"\r")
+        deadline = time.time() + 8
+        while b"Select a Codex model" not in raw and time.time() < deadline:
+            ready, _, _ = select.select([fd], [], [], 0.1)
+            if ready:
+                try:
+                    data = os.read(fd, 65536)
+                    if not data:
+                        break
+                    raw.extend(data)
+                except OSError:
+                    break
     if b"Select a Codex model" in raw:
         os.write(fd, b"\x1b[B")
         time.sleep(0.12)
